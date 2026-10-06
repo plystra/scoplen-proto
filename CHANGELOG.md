@@ -23,6 +23,10 @@ All notable changes to `scoplen-proto` will be recorded here.
   session-bound probes and signed requests, bounded OpenSSH user and host certificate validation,
   and host-key trust callbacks. The concrete SSH transport, remaining authentication methods,
   channels, SFTP, and interoperability work remain open.
+- Added the engine-independent K-7 FIDO2 security-key boundary with resident-key discovery,
+  `sk-ssh-ed25519@openssh.com` and `sk-ecdsa-sha2-nistp256@openssh.com` public-key and signature
+  codecs, RFC 4252 session binding, application scoping, authenticator flags and counters, and
+  malformed-input and requirement failure tests.
 - Added the stable HTTP error-code registry and RFC 9457 problem details with JSON and deterministic
   CBOR codecs, including malformed-input tests and a published CBOR vector.
 - Extended the stable error-code registry for authenticated sync HTTP adapters with

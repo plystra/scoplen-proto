@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Shared SSH protocol core for Scoplen clients and gateways.
 //!
-//! The algorithm policy, engine-independent transport boundary, and authentication boundary for
-//! K-7. The concrete SSH engine, channels, SFTP, and agent transports remain separate so callers
-//! do not depend on a particular engine.
+//! The algorithm policy, engine-independent transport boundary, authentication boundary, and
+//! security-key wire support for K-7. The concrete SSH engine, channels, SFTP, and agent
+//! transports remain separate so callers do not depend on a particular engine.
 
 #![forbid(unsafe_code)]
 
@@ -12,6 +12,7 @@ pub const CONTRACT: &str = "K-7";
 
 mod authentication;
 mod policy;
+mod security_key;
 mod transport;
 
 pub use authentication::{
@@ -21,6 +22,10 @@ pub use authentication::{
     SshCertificate, UserCertificate, verify_host_key,
 };
 pub use policy::{AlgorithmCategory, AlgorithmPolicyError, HostAlgorithmPolicy};
+pub use security_key::{
+    SecurityKeyAlgorithm, SecurityKeyAuthRequest, SecurityKeyError, SecurityKeyProvider,
+    SecurityKeyPublicKey, SecurityKeySignOptions, SecurityKeySignature,
+};
 pub use transport::{
     EXT_INFO_CLIENT, EXT_INFO_SERVER, KeyExchangeFamily, NegotiatedTransport, STRICT_KEX_CLIENT,
     STRICT_KEX_CLIENT_STANDARD, STRICT_KEX_SERVER, STRICT_KEX_SERVER_STANDARD, StrictKexError,

@@ -24,7 +24,9 @@ preference present in each peer list, and enables RFC 8308 and strict-KEX marker
 roles advertise them. `StrictKeyExchange` enforces the initial KEXINIT-first rule, KEX-family
 message admission, one-message limits, sequence-wrap refusal, and sequence-number reset after
 NEWKEYS. The engine-independent authentication boundary supplies Ed25519 and P-256 `Signer`
-adapters, RFC 4252 publickey probes and signed requests, bounded OpenSSH certificate parsing and
-validation, and a host-key trust callback that is called only after validation. The concrete SSH
-transport, remaining authentication methods, channels, SFTP, and interoperability work remain
-open.
+adapters, FIDO2 `SecurityKeyProvider` adapters, RFC 4252 publickey probes and signed requests,
+bounded OpenSSH certificate parsing and validation, and a host-key trust callback that is called
+only after validation. Security-key requests preserve the OpenSSH application, user-presence and
+user-verification flags, and authenticator counter while rejecting malformed or unbounded input.
+The concrete SSH transport, remaining authentication methods, channels, SFTP, and
+interoperability work remain open.

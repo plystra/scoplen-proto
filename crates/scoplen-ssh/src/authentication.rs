@@ -321,17 +321,11 @@ impl PublicKeyAuthRequest {
     /// Return the exact bytes signed by [`Signer::sign`].
     #[must_use]
     pub fn signature_payload(&self) -> Vec<u8> {
-        let mut payload = Vec::new();
-        write_string(&mut payload, &self.context.session_id).expect("bounded session id");
-        payload.push(USERAUTH_REQUEST);
-        write_string(&mut payload, self.context.username.as_bytes()).expect("bounded username");
-        write_string(&mut payload, self.context.service.as_bytes()).expect("bounded service");
-        write_string(&mut payload, USERAUTH_METHOD).expect("static method");
-        payload.push(1);
-        write_string(&mut payload, self.identity.algorithm().as_bytes())
-            .expect("bounded algorithm");
-        write_string(&mut payload, self.identity.key_blob()).expect("bounded public key");
-        payload
+        publickey_signature_payload(
+            &self.context,
+            self.identity.algorithm(),
+            self.identity.key_blob(),
+        )
     }
 
     /// Encode the `SSH_MSG_USERAUTH_REQUEST` payload, excluding packet framing and MAC.
@@ -808,7 +802,24 @@ fn validate_text_field(value: &str, field: &'static str) -> Result<(), SignerErr
     Ok(())
 }
 
-fn write_string(output: &mut Vec<u8>, value: &[u8]) -> Result<(), SignerError> {
+pub(crate) fn publickey_signature_payload(
+    context: &PublicKeyAuthContext,
+    algorithm: &str,
+    key_blob: &[u8],
+) -> Vec<u8> {
+    let mut payload = Vec::new();
+    write_string(&mut payload, &context.session_id).expect("bounded session id");
+    payload.push(USERAUTH_REQUEST);
+    write_string(&mut payload, context.username.as_bytes()).expect("bounded username");
+    write_string(&mut payload, context.service.as_bytes()).expect("bounded service");
+    write_string(&mut payload, USERAUTH_METHOD).expect("static method");
+    payload.push(1);
+    write_string(&mut payload, algorithm.as_bytes()).expect("bounded algorithm");
+    write_string(&mut payload, key_blob).expect("bounded public key");
+    payload
+}
+
+pub(crate) fn write_string(output: &mut Vec<u8>, value: &[u8]) -> Result<(), SignerError> {
     let length =
         u32::try_from(value.len()).map_err(|_| SignerError::InvalidInput("SSH field too large"))?;
     output.extend_from_slice(&length.to_be_bytes());
@@ -816,7 +827,7 @@ fn write_string(output: &mut Vec<u8>, value: &[u8]) -> Result<(), SignerError> {
     Ok(())
 }
 
-fn read_string(input: &[u8]) -> Option<(&[u8], &[u8])> {
+pub(crate) fn read_string(input: &[u8]) -> Option<(&[u8], &[u8])> {
     let length = u32::from_be_bytes(input.get(..4)?.try_into().ok()?) as usize;
     let end = 4usize.checked_add(length)?;
     Some((input.get(4..end)?, input.get(end..)?))
