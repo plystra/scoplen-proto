@@ -29,6 +29,12 @@ responses use `versions`, contain one object id in ascending sequence order, and
 the current entry plus 20 retained entries. All expected values are deterministic CBOR in lowercase
 hexadecimal.
 
+`sync-notifications.json` contains the content-free K-4 notification events sent over the WebSocket.
+Vault advancement uses `{seq, vault}`, rotation pending uses `{rotation_pending, vault}`, and
+device revocation uses the boolean marker `{device_revoked: true}` until the specification defines
+an event payload. UUIDs are encoded as 16-byte UUIDv7 strings, and all expected values are
+deterministic CBOR in lowercase hexadecimal.
+
 `crypto.json` contains K-2 known answers. All private keys and plaintexts in this document are
 synthetic, public test material and must never be used for real data. Every binary field is
 lowercase hexadecimal; fields in `input` are separated by `|`. Decimal integer fields and the

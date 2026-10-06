@@ -31,3 +31,6 @@ All notable changes to `scoplen-proto` will be recorded here.
 - Added K-4 write-batch and assignment codecs with atomic-batch limits, acknowledgement request and
   response codecs, objects snapshot pages, bounded versions history pages, strict failure paths,
   published deterministic CBOR vectors, and the cursor-ahead and object-not-found error codes.
+- Added content-free K-4 WebSocket notification codecs for vault advancement, pending rotation, and
+  device revocation, with strict event validation, extension tolerance, failure-path tests, and
+  published deterministic CBOR vectors.
