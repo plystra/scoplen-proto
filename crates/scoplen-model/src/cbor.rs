@@ -30,7 +30,7 @@ pub enum Value {
     /// A non-negative integer.
     UInt(u64),
     /// A negative integer in the CBOR major type 1 range.
-    Int(i64),
+    Int(i128),
     /// A byte string.
     Bytes(Vec<u8>),
     /// A normalized UTF-8 text string.
@@ -107,13 +107,12 @@ fn encode_value(value: &Value, depth: usize, output: &mut Vec<u8>) -> Result<(),
         Value::Bool(true) => output.push(0xf5),
         Value::UInt(value) => write_argument(0, *value, output),
         Value::Int(value) => {
-            let argument = if *value >= 0 {
-                u64::try_from(*value).expect("non-negative i64 fits in u64")
-            } else {
-                u64::try_from(!*value)
-                    .expect("bitwise complement of a negative i64 is non-negative")
-            };
-            write_argument(u8::from(*value < 0), argument, output);
+            let argument = value
+                .checked_neg()
+                .and_then(|value| value.checked_sub(1))
+                .and_then(|value| u64::try_from(value).ok())
+                .ok_or(Error::UnsupportedValue)?;
+            write_argument(1, argument, output);
         }
         Value::Bytes(value) => {
             write_argument(2, value.len() as u64, output);
@@ -206,10 +205,7 @@ impl<'a> Decoder<'a> {
             0 => Ok(Value::UInt(self.argument(additional)?)),
             1 => {
                 let argument = self.argument(additional)?;
-                if argument > i64::MAX as u64 {
-                    return Err(Error::UnsupportedValue);
-                }
-                Ok(Value::Int(-1 - i64::try_from(argument).expect("argument is at most i64::MAX")))
+                Ok(Value::Int(-1 - i128::from(argument)))
             }
             2 => Ok(Value::Bytes(self.bytes(additional)?.to_vec())),
             3 => {
@@ -343,6 +339,86 @@ impl fmt::Display for Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    fn arb_value() -> impl Strategy<Value = Value> {
+        let leaf = prop_oneof![
+            Just(Value::Null),
+            any::<bool>().prop_map(Value::Bool),
+            any::<u64>().prop_map(Value::UInt),
+            any::<u64>().prop_map(|argument| Value::Int(-1 - i128::from(argument))),
+            proptest::collection::vec(any::<u8>(), 0..64).prop_map(Value::Bytes),
+            any::<String>().prop_map(|text| Value::Text(text.nfc().collect())),
+        ];
+        leaf.prop_recursive(4, 64, 8, |inner| {
+            prop_oneof![
+                proptest::collection::vec(inner.clone(), 0..8).prop_map(Value::Array),
+                proptest::collection::btree_map(any::<u16>(), inner, 0..8).prop_map(|entries| {
+                    Value::Map(
+                        entries
+                            .into_iter()
+                            .map(|(key, value)| (Value::UInt(u64::from(key)), value))
+                            .collect(),
+                    )
+                }),
+            ]
+        })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        #[test]
+        fn round_trips_canonical_values(value in arb_value()) {
+            let encoded = encode(&value).expect("generated value is encodable");
+            let decoded = decode(&encoded).expect("generated encoding is canonical");
+            prop_assert_eq!(&decoded, &value);
+            prop_assert_eq!(encode(&decoded).expect("decoded value is encodable"), encoded);
+        }
+
+        #[test]
+        fn map_encoding_is_independent_of_entry_order(
+            entries in proptest::collection::btree_map(any::<u16>(), arb_value(), 0..16)
+        ) {
+            let mut pairs: Vec<_> = entries
+                .into_iter()
+                .map(|(key, value)| (Value::UInt(u64::from(key)), value))
+                .collect();
+            let expected = encode(&Value::Map(pairs.clone())).expect("unique map keys");
+            pairs.reverse();
+            prop_assert_eq!(encode(&Value::Map(pairs)).expect("unique map keys"), expected);
+        }
+
+        #[test]
+        fn rejects_non_shortest_arguments(
+            major in 0u8..=5,
+            argument in 0u64..=23,
+            width in 1u8..=4
+        ) {
+            let mut bytes = vec![(major << 5) | (23 + width)];
+            match width {
+                1 => bytes.push(argument as u8),
+                2 => bytes.extend_from_slice(&(argument as u16).to_be_bytes()),
+                3 => bytes.extend_from_slice(&(argument as u32).to_be_bytes()),
+                4 => bytes.extend_from_slice(&argument.to_be_bytes()),
+                _ => unreachable!("generated width is 1 through 4"),
+            }
+            prop_assert_eq!(decode(&bytes), Err(Error::NonCanonical));
+        }
+
+        #[test]
+        fn rejects_out_of_order_or_duplicate_map_keys(first in any::<u16>(), second in any::<u16>()) {
+            let first = encode(&Value::UInt(u64::from(first))).expect("integer key");
+            let second = encode(&Value::UInt(u64::from(second))).expect("integer key");
+            let (larger, smaller) = if first >= second { (first, second) } else { (second, first) };
+            let mut bytes = vec![0xa2];
+            bytes.extend_from_slice(&larger);
+            bytes.push(0xf6);
+            bytes.extend_from_slice(&smaller);
+            bytes.push(0xf6);
+            prop_assert_eq!(decode(&bytes), Err(Error::NonCanonicalMap));
+        }
+    }
 
     #[test]
     fn encodes_shortest_integer_and_map_forms() {
@@ -370,7 +446,7 @@ mod tests {
             Value::Null,
             Value::Bool(true),
             Value::UInt(u64::MAX),
-            Value::Int(i64::MIN),
+            Value::Int(-1 - i128::from(u64::MAX)),
             Value::Bytes(vec![0, 1, 2]),
             Value::Text("café".into()),
             Value::Array(vec![Value::UInt(1), Value::Text("nested".into())]),
@@ -386,6 +462,19 @@ mod tests {
     #[test]
     fn rejects_non_nfc_text() {
         assert_eq!(decode(&[0x63, 0x65, 0xcc, 0x81]), Err(Error::NonNormalizedText));
+    }
+
+    #[test]
+    fn covers_full_cbor_negative_integer_range() {
+        let minimum = Value::Int(-1 - i128::from(u64::MAX));
+        assert_eq!(
+            encode(&minimum),
+            Ok(vec![0x3b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff])
+        );
+        assert_eq!(decode(&[0x3b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]), Ok(minimum));
+        assert_eq!(encode(&Value::Int(0)), Err(Error::UnsupportedValue));
+        assert_eq!(encode(&Value::Int(-2 - i128::from(u64::MAX))), Err(Error::UnsupportedValue));
+        assert_eq!(encode(&Value::Int(i128::MIN)), Err(Error::UnsupportedValue));
     }
 
     #[test]

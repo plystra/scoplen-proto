@@ -22,5 +22,6 @@ after its contract is specified in `scoplen-docs` and covered by vectors and fai
 
 ## Open gaps
 
-- The S1 baseline is the current implementation boundary; S2–S7 behavior is not yet present.
+- The S1 baseline is complete and the deterministic CBOR portion of S2 is implemented; the
+  remaining S2 object-model behavior and S3–S7 contracts are not yet present.
 - Independent security review and interoperability evidence are required before a Stable release.

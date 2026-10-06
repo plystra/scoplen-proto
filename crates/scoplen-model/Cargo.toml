@@ -12,6 +12,7 @@ unicode-normalization.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+proptest = "1.6.0"
 scoplen-test-vectors = { path = "../scoplen-test-vectors", version = "0.1.0" }
 
 [lints]

@@ -8,9 +8,10 @@ under Apache-2.0.
 
 ## Status
 
-Maturity: Exploration. Maintenance: Active. The repository baseline (roadmap gate S1) and the K-1
-object model (roadmap gate S2) are implemented. Protocol, cryptographic, and wire behavior is
-added only from the canonical specifications in `scoplen-docs`.
+Maturity: Exploration. Maintenance: Active. The repository baseline (roadmap gate S1) is complete;
+the K-1 object model (roadmap gate S2) is in progress, with its deterministic CBOR codec and
+property and fuzz tests implemented first. Protocol, cryptographic, and wire behavior is added only
+from the canonical specifications in `scoplen-docs`.
 
 ## Repository shape
 
