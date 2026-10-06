@@ -77,6 +77,13 @@ database wrapper vector uses 8 MiB and one pass to keep CI practical; production
 lowercase hexadecimal. The `scoplen-api` tests exercise the public JSON and CBOR contract, including
 unknown error-code preservation and malformed-body rejection.
 
+`api-auth.json` contains the K-3 JSON vectors. Challenge responses use a 32-byte lowercase
+hexadecimal nonce and an RFC 3339 UTC timestamp. Device requests use a canonical UUIDv7, the
+canonical challenge nonce, and a fixed-width P-256 `r || s` signature as lowercase hexadecimal.
+Token responses use literal `DPoP` and the fixed 600-second and 30-day lifetimes. The expected
+values are canonical field order; readers ignore unknown response fields while device requests
+reject unknown fields.
+
 `sync-session.json` contains `sync.session.request` and `sync.session.response` vectors. Each
 `input` is a JSON description of the typed K-4 session value; `expected` is deterministic CBOR in
 lowercase hexadecimal. UUIDs are written as canonical text in the vector input and encoded as

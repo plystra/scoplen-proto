@@ -1,0 +1,24 @@
+{
+  "format": "scoplen-test-vectors",
+  "version": 1,
+  "vectors": [
+    {
+      "id": "api-auth-challenge-response-v1",
+      "kind": "auth.challenge.response",
+      "input": "{\"server_time\":\"2026-10-07T12:34:56.123Z\",\"nonce\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\"}",
+      "expected": "{\"nonce\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\",\"server_time\":\"2026-10-07T12:34:56.123Z\"}"
+    },
+    {
+      "id": "api-auth-device-request-v1",
+      "kind": "auth.device.request",
+      "input": "{\"signature\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f\",\"nonce\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\",\"device_id\":\"00000000-0000-7000-8000-000000000001\"}",
+      "expected": "{\"device_id\":\"00000000-0000-7000-8000-000000000001\",\"nonce\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\",\"signature\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f\"}"
+    },
+    {
+      "id": "api-auth-token-response-v1",
+      "kind": "auth.token.response",
+      "input": "{\"refresh_expires_in\":2592000,\"refresh_token\":\"refresh-token-test\",\"expires_in\":600,\"token_type\":\"DPoP\",\"access_token\":\"access-token-test\"}",
+      "expected": "{\"access_token\":\"access-token-test\",\"token_type\":\"DPoP\",\"expires_in\":600,\"refresh_token\":\"refresh-token-test\",\"refresh_expires_in\":2592000}"
+    }
+  ]
+}
