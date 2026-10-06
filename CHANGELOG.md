@@ -40,6 +40,8 @@ All notable changes to `scoplen-proto` will be recorded here.
   multiple requests until clean peer close, and refuses oversized input before allocation.
 - Added exact-key remove-identity requests with bounded public-key blobs, client helpers, server
   dispatch, and failure-path coverage.
+- Added the `agent_decoder` cargo-fuzz target and wired every current decoder target into the Linux
+  CI fuzz-build job.
 - Added the stable HTTP error-code registry and RFC 9457 problem details with JSON and deterministic
   CBOR codecs, including malformed-input tests and a published CBOR vector.
 - Extended the stable error-code registry for authenticated sync HTTP adapters with

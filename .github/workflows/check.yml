@@ -32,6 +32,8 @@ jobs:
           cargo +nightly install cargo-fuzz --locked
           cargo +nightly fuzz build vector_loader
           cargo +nightly fuzz build object_decoder
+          cargo +nightly fuzz build crypto_decoders
+          cargo +nightly fuzz build agent_decoder
 
   dependency-audit:
     name: Dependency policy

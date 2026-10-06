@@ -12,6 +12,7 @@ libfuzzer-sys = "0.4.7"
 scoplen-test-vectors = { path = "../crates/scoplen-test-vectors" }
 scoplen-model = { path = "../crates/scoplen-model" }
 scoplen-crypto = { path = "../crates/scoplen-crypto" }
+scoplen-ssh = { path = "../crates/scoplen-ssh" }
 
 [[bin]]
 name = "vector_loader"
@@ -30,6 +31,13 @@ bench = false
 [[bin]]
 name = "crypto_decoders"
 path = "fuzz_targets/crypto_decoders.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "agent_decoder"
+path = "fuzz_targets/agent_decoder.rs"
 test = false
 doc = false
 bench = false
