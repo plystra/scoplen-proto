@@ -10,4 +10,6 @@ description = "Scoplen's shared SSH protocol core."
 workspace = true
 
 [dependencies]
+scoplen-crypto = { path = "../scoplen-crypto", version = "0.1.0" }
+ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["ed25519", "getrandom", "p256", "std"] }
 thiserror.workspace = true
