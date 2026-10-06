@@ -3,10 +3,22 @@
   "version": 1,
   "vectors": [
     {
-      "id": "baseline-loader-roundtrip",
+      "id": "model-cbor-shortest-map",
       "kind": "model.cbor",
-      "input": "00",
-      "expected": "00"
+      "input": "a201010a1818",
+      "expected": "a201010a1818"
+    },
+    {
+      "id": "model-cbor-nfc-text",
+      "kind": "model.cbor",
+      "input": "65636166c3a9",
+      "expected": "65636166c3a9"
+    },
+    {
+      "id": "model-merge-higher-clock",
+      "kind": "model.merge",
+      "input": "clock:2>1",
+      "expected": "higher-clock"
     }
   ]
 }

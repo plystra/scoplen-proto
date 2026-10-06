@@ -6,5 +6,13 @@ license.workspace = true
 rust-version.workspace = true
 description = "Scoplen's deterministic object model and merge rules."
 
+[dependencies]
+thiserror.workspace = true
+unicode-normalization.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+scoplen-test-vectors = { path = "../scoplen-test-vectors", version = "0.1.0" }
+
 [lints]
 workspace = true

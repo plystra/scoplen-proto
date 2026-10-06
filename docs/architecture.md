@@ -11,6 +11,7 @@ no runtime dependency on either consumer.
 | `scoplen-api` | K-3 through K-6 wire contracts |
 | `scoplen-test-vectors` | Known-answer vector envelope and loader |
 
-The baseline keeps crate roots intentionally small. Later gates add contract behavior in the order
+The K-1 crate owns strict deterministic CBOR, UUIDv7/HLC values, object envelopes, typed field
+validation, tombstones, and pure merge helpers. Later gates add contract behavior in the order
 defined by `scoplen-docs/17-implementation-roadmap.md`; no consumer may define a second copy of a
 wire format or cryptographic construction.

@@ -16,6 +16,11 @@ license = "Apache-2.0"
 rust-version = "1.85"
 authors = ["Scoplen maintainers"]
 
+[workspace.dependencies]
+thiserror = "2.0.12"
+unicode-normalization = "0.1.24"
+uuid = { version = "=1.16.0", features = ["v7"] }
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 

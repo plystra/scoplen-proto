@@ -10,10 +10,18 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4.7"
 scoplen-test-vectors = { path = "../crates/scoplen-test-vectors" }
+scoplen-model = { path = "../crates/scoplen-model" }
 
 [[bin]]
 name = "vector_loader"
 path = "fuzz_targets/vector_loader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "object_decoder"
+path = "fuzz_targets/object_decoder.rs"
 test = false
 doc = false
 bench = false
