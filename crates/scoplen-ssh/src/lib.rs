@@ -10,11 +10,17 @@
 /// The contract identifier used by the protocol-core crate.
 pub const CONTRACT: &str = "K-7";
 
+mod agent;
 mod authentication;
 mod policy;
 mod security_key;
 mod transport;
 
+pub use agent::{
+    AGENT_SIGN_FLAG_RSA_SHA2_256, AGENT_SIGN_FLAG_RSA_SHA2_512, AgentChannel, AgentClient,
+    AgentError, AgentIdentity, AgentKeyStore, AgentMessage, AgentServer, MAX_AGENT_COMMENT,
+    MAX_AGENT_FRAME, MAX_AGENT_IDENTITIES, MAX_AGENT_KEY_BLOB, MAX_AGENT_SIGN_DATA,
+};
 pub use authentication::{
     CertificateKind, CertificateValidationError, CertificateValidationPolicy, Ed25519SshSigner,
     HostKey, HostKeyVerificationError, HostKeyVerifier, P256SshSigner, PublicKeyAuthContext,

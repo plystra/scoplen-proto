@@ -27,6 +27,10 @@ All notable changes to `scoplen-proto` will be recorded here.
   `sk-ssh-ed25519@openssh.com` and `sk-ecdsa-sha2-nistp256@openssh.com` public-key and signature
   codecs, RFC 4252 session binding, application scoping, authenticator flags and counters, and
   malformed-input and requirement failure tests.
+- Added the bounded K-7 SSH agent request-identities and sign request/response codecs, a
+  transport-neutral agent client, and server dispatch with opaque failure mapping and loopback
+  and malformed-frame tests. Platform channels, forwarding, and the remaining agent protocol
+  operations remain open.
 - Added the stable HTTP error-code registry and RFC 9457 problem details with JSON and deterministic
   CBOR codecs, including malformed-input tests and a published CBOR vector.
 - Extended the stable error-code registry for authenticated sync HTTP adapters with

@@ -270,12 +270,7 @@ impl SecurityKeySignature {
         }
         let counter_bytes: [u8; 4] =
             counter_bytes.try_into().map_err(|_| SecurityKeyError::InvalidEncoding)?;
-        Self::new(
-            algorithm,
-            signature,
-            flags,
-            u32::from_be_bytes(counter_bytes),
-        )
+        Self::new(algorithm, signature, flags, u32::from_be_bytes(counter_bytes))
     }
 
     /// Encode the SSH `sk-` signature body (`string signature`, flags, counter).

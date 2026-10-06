@@ -28,5 +28,7 @@ adapters, FIDO2 `SecurityKeyProvider` adapters, RFC 4252 publickey probes and si
 bounded OpenSSH certificate parsing and validation, and a host-key trust callback that is called
 only after validation. Security-key requests preserve the OpenSSH application, user-presence and
 user-verification flags, and authenticator counter while rejecting malformed or unbounded input.
-The concrete SSH transport, remaining authentication methods, channels, SFTP, and
-interoperability work remain open.
+The agent boundary provides bounded request-identities and sign request/response codecs,
+transport-neutral client calls, and server dispatch that maps key-store errors to the opaque SSH
+agent failure response. Platform agent channels, agent forwarding, the concrete SSH transport,
+remaining authentication methods, channels, SFTP, and interoperability work remain open.

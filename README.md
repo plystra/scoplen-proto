@@ -23,8 +23,10 @@ P-256, and FIDO2 `sk-` security-key providers, RFC 4252 session-bound requests, 
 certificates, and host-key verification callbacks that run only after certificate validation.
 Security-key requests validate resident-key identities, applications, authenticator flags, counters,
 and bounded OpenSSH signature encodings. It does not yet establish SSH connections; the concrete
-russh transport, remaining authentication methods, channels, SFTP, and interoperability work
-remain open.
+russh transport, platform agent channels, agent forwarding, remaining authentication methods,
+channels, SFTP, and interoperability work remain open. The agent boundary already provides
+bounded request-identities and sign request/response codecs, a transport-neutral client, and
+server dispatch with opaque failure mapping.
 The `scoplen-api` crate exposes the K-3 error-code registry, RFC 9457 problem details, and device
 challenge, signed-device request, and token response JSON codecs, plus K-4 session, change-feed,
 write-batch, acknowledgement, snapshot, version-history, content-free notification, and account
