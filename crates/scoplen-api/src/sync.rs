@@ -16,6 +16,16 @@ pub const MAX_SYNC_BATCH_OBJECTS: usize = 500;
 pub const MAX_SYNC_BATCH_BYTES: usize = 4 * 1024 * 1024;
 /// Maximum number of retained historical versions in addition to the current version.
 pub const MAX_SYNC_RETAINED_VERSIONS: usize = 20;
+/// Maximum size of one opaque account-key artifact in the K-4 key-bundle codecs.
+pub const MAX_SYNC_KEY_ARTIFACT_BYTES: usize = 64 * 1024;
+/// Maximum number of device ARK wraps in one K-4 account-key update.
+pub const MAX_SYNC_KEY_DEVICE_WRAPS: usize = 1_000;
+/// Maximum encoded size of an account-key request or response body.
+pub const MAX_SYNC_KEY_BODY_BYTES: usize = 4 * 1024 * 1024;
+/// Fixed Ed25519 signature size carried by an account-key update.
+pub const SYNC_KEY_SIGNATURE_BYTES: usize = 64;
+/// Domain separator covered by an account-key update signature.
+pub const SYNC_KEYS_SIGNATURE_DOMAIN: &[u8] = b"spl-sync-keys-v1";
 
 /// Errors at the K-4 sync wire boundary.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -1095,6 +1105,348 @@ impl SyncVersionsResponse {
     }
 }
 
+/// The account key bundle returned by `GET /sync/v1/keys`.
+///
+/// Key artifacts are intentionally opaque to K-4. Their cryptographic structure is owned by
+/// `scoplen-crypto`; this codec enforces only the transport limits and ordering rules from
+/// `07-sync-protocol.md` §8.1.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncAccountKeyBundle {
+    /// Positive monotonic bundle revision.
+    pub revision: u64,
+    /// The authenticated device's ARK wrapping.
+    pub wrapped_ark: Vec<u8>,
+    /// ARK-encrypted account Ed25519 private key.
+    pub account_signing_key: Vec<u8>,
+    /// ARK-encrypted account X25519 private key.
+    pub account_kem_key: Vec<u8>,
+    /// Versioned recovery-wrapped ARK blob.
+    pub recovery_blob: Vec<u8>,
+    /// Signed device certificates, sorted lexicographically by opaque bytes.
+    pub certificates: Vec<Vec<u8>>,
+    /// Signed device revocation statements, sorted lexicographically by opaque bytes.
+    pub revocations: Vec<Vec<u8>>,
+}
+
+impl SyncAccountKeyBundle {
+    /// Validate the bundle fields, artifact limits, and certificate ordering.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a zero revision, empty or oversized artifacts, or unsorted arrays.
+    pub fn validate(&self) -> Result<(), SyncCodecError> {
+        positive(self.revision, "key bundle revision")?;
+        validate_key_artifact(&self.wrapped_ark, "wrapped_ark")?;
+        validate_key_artifact(&self.account_signing_key, "account_signing_key")?;
+        validate_key_artifact(&self.account_kem_key, "account_kem_key")?;
+        validate_key_artifact(&self.recovery_blob, "recovery_blob")?;
+        validate_sorted_artifacts(&self.certificates, "certificates")?;
+        validate_sorted_artifacts(&self.revocations, "revocations")?;
+        Ok(())
+    }
+
+    /// Encode the bundle as a deterministic CBOR response map.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when validation fails, the encoded body exceeds the K-4 limit, or CBOR
+    /// encoding fails.
+    pub fn to_cbor(&self) -> Result<Vec<u8>, SyncCodecError> {
+        self.validate()?;
+        let encoded = encode_map(vec![
+            ("revision", Value::UInt(self.revision)),
+            ("wrapped_ark", Value::Bytes(self.wrapped_ark.clone())),
+            ("account_signing_key", Value::Bytes(self.account_signing_key.clone())),
+            ("account_kem_key", Value::Bytes(self.account_kem_key.clone())),
+            ("recovery_blob", Value::Bytes(self.recovery_blob.clone())),
+            (
+                "certificates",
+                Value::Array(self.certificates.iter().cloned().map(Value::Bytes).collect()),
+            ),
+            (
+                "revocations",
+                Value::Array(self.revocations.iter().cloned().map(Value::Bytes).collect()),
+            ),
+        ])?;
+        enforce_key_body_limit(&encoded)?;
+        Ok(encoded)
+    }
+
+    /// Decode a deterministic CBOR response map.
+    ///
+    /// Unknown response fields are ignored for forward compatibility. Known fields with the
+    /// wrong type, missing fields, invalid artifacts, or invalid ordering are rejected.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed, oversized, or invalid CBOR.
+    pub fn from_cbor(input: &[u8]) -> Result<Self, SyncCodecError> {
+        enforce_key_body_limit(input)?;
+        let mut fields = decode_map(input)?;
+        let certificates = take_key_artifacts(&mut fields, "certificates")?;
+        let revocations = take_key_artifacts(&mut fields, "revocations")?;
+        let bundle = Self {
+            revision: take_uint(&mut fields, "revision")?,
+            wrapped_ark: take_key_artifact(&mut fields, "wrapped_ark")?,
+            account_signing_key: take_key_artifact(&mut fields, "account_signing_key")?,
+            account_kem_key: take_key_artifact(&mut fields, "account_kem_key")?,
+            recovery_blob: take_key_artifact(&mut fields, "recovery_blob")?,
+            certificates,
+            revocations,
+        };
+        bundle.validate()?;
+        Ok(bundle)
+    }
+}
+
+/// One device-specific ARK wrapping in a `PUT /sync/v1/keys` update.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncAccountDeviceWrap {
+    /// Enrolled device receiving this wrapping.
+    pub device_id: Uuid,
+    /// Opaque ARK wrapping for the device.
+    pub wrapped_ark: Vec<u8>,
+}
+
+impl SyncAccountDeviceWrap {
+    fn validate(&self) -> Result<(), SyncCodecError> {
+        valid_uuid(self.device_id, "device wrap device id")?;
+        validate_key_artifact(&self.wrapped_ark, "device wrap wrapped_ark")
+    }
+
+    fn into_value(self) -> Value {
+        map(vec![
+            ("device_id", Value::Bytes(self.device_id.as_bytes().to_vec())),
+            ("wrapped_ark", Value::Bytes(self.wrapped_ark)),
+        ])
+    }
+
+    fn from_value(value: Value) -> Result<Self, SyncCodecError> {
+        let mut fields = expect_map(value)?;
+        let wrap = Self {
+            device_id: take_uuid(&mut fields, "device_id")?,
+            wrapped_ark: take_key_artifact(&mut fields, "wrapped_ark")?,
+        };
+        if !fields.is_empty() {
+            return Err(invalid("unknown device wrap field"));
+        }
+        wrap.validate()?;
+        Ok(wrap)
+    }
+}
+
+/// A signed account-key rotation published with `PUT /sync/v1/keys`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncAccountKeyBundleUpdate {
+    /// Positive monotonic bundle revision.
+    pub revision: u64,
+    /// One ARK wrapping for every enrolled, unrevoked device.
+    pub device_wraps: Vec<SyncAccountDeviceWrap>,
+    /// ARK-encrypted account Ed25519 private key.
+    pub account_signing_key: Vec<u8>,
+    /// ARK-encrypted account X25519 private key.
+    pub account_kem_key: Vec<u8>,
+    /// Versioned recovery-wrapped ARK blob.
+    pub recovery_blob: Vec<u8>,
+    /// Fixed-width Ed25519 signature over [`Self::signature_input`].
+    pub signature: Vec<u8>,
+}
+
+impl SyncAccountKeyBundleUpdate {
+    /// Validate fields other than the signature itself.
+    fn validate_unsigned(&self) -> Result<(), SyncCodecError> {
+        positive(self.revision, "key bundle revision")?;
+        if self.device_wraps.is_empty() {
+            return Err(invalid("device_wraps must not be empty"));
+        }
+        if self.device_wraps.len() > MAX_SYNC_KEY_DEVICE_WRAPS {
+            return Err(invalid("device_wraps exceeds 1000 entries"));
+        }
+        for wrap in &self.device_wraps {
+            wrap.validate()?;
+        }
+        for pair in self.device_wraps.windows(2) {
+            if pair[0].device_id.as_bytes() >= pair[1].device_id.as_bytes() {
+                return Err(invalid("device_wraps must be strictly sorted by device id"));
+            }
+        }
+        validate_key_artifact(&self.account_signing_key, "account_signing_key")?;
+        validate_key_artifact(&self.account_kem_key, "account_kem_key")?;
+        validate_key_artifact(&self.recovery_blob, "recovery_blob")?;
+        Ok(())
+    }
+
+    /// Validate every request field, including the fixed-width Ed25519 signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for missing, empty, oversized, unsorted, or malformed fields.
+    pub fn validate(&self) -> Result<(), SyncCodecError> {
+        self.validate_unsigned()?;
+        if self.signature.len() != SYNC_KEY_SIGNATURE_BYTES {
+            return Err(invalid("signature must be exactly 64 bytes"));
+        }
+        Ok(())
+    }
+
+    /// Validate that this update is the next revision after `current`.
+    ///
+    /// This helper covers the monotonic part of the endpoint contract; the server separately
+    /// handles exact replay by comparing all fields and signature bytes with its stored revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the update is not exactly `current + 1` or the current revision is
+    /// already at the unsigned-integer maximum.
+    pub fn validate_next_revision(&self, current: u64) -> Result<(), SyncCodecError> {
+        self.validate()?;
+        let expected = current.checked_add(1).ok_or_else(|| invalid("revision cannot advance"))?;
+        if self.revision != expected {
+            return Err(invalid("revision must be exactly one greater than current"));
+        }
+        Ok(())
+    }
+
+    /// Encode the request without its signature field for signing and verification.
+    ///
+    /// The returned bytes are the deterministic CBOR representation of every request field
+    /// except `signature`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when unsigned fields are invalid or CBOR encoding fails.
+    pub fn unsigned_cbor(&self) -> Result<Vec<u8>, SyncCodecError> {
+        self.validate_unsigned()?;
+        let encoded = encode_key_bundle_update(self, false)?;
+        enforce_key_body_limit(&encoded)?;
+        Ok(encoded)
+    }
+
+    /// Return the exact bytes covered by the account signing key.
+    ///
+    /// The format is `ASCII("spl-sync-keys-v1") || unsigned_cbor()` with no length prefix.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when unsigned fields are invalid or CBOR encoding fails.
+    pub fn signature_input(&self) -> Result<Vec<u8>, SyncCodecError> {
+        let unsigned = self.unsigned_cbor()?;
+        let mut input = Vec::with_capacity(SYNC_KEYS_SIGNATURE_DOMAIN.len() + unsigned.len());
+        input.extend_from_slice(SYNC_KEYS_SIGNATURE_DOMAIN);
+        input.extend_from_slice(&unsigned);
+        Ok(input)
+    }
+
+    /// Encode the complete signed update as a deterministic CBOR request map.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when validation fails, the encoded body exceeds 4 MiB, or CBOR encoding
+    /// fails.
+    pub fn to_cbor(&self) -> Result<Vec<u8>, SyncCodecError> {
+        self.validate()?;
+        let encoded = encode_key_bundle_update(self, true)?;
+        enforce_key_body_limit(&encoded)?;
+        Ok(encoded)
+    }
+
+    /// Decode a strict deterministic CBOR update request. Unknown fields are rejected.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed, oversized, or invalid CBOR.
+    pub fn from_cbor(input: &[u8]) -> Result<Self, SyncCodecError> {
+        enforce_key_body_limit(input)?;
+        let mut fields = decode_map(input)?;
+        let device_wraps = match fields.remove("device_wraps") {
+            Some(Value::Array(values)) => values
+                .into_iter()
+                .map(SyncAccountDeviceWrap::from_value)
+                .collect::<Result<Vec<_>, _>>()?,
+            _ => return Err(invalid("device_wraps must be an array")),
+        };
+        let update = Self {
+            revision: take_uint(&mut fields, "revision")?,
+            device_wraps,
+            account_signing_key: take_key_artifact(&mut fields, "account_signing_key")?,
+            account_kem_key: take_key_artifact(&mut fields, "account_kem_key")?,
+            recovery_blob: take_key_artifact(&mut fields, "recovery_blob")?,
+            signature: take_exact_bytes(&mut fields, "signature", SYNC_KEY_SIGNATURE_BYTES)?,
+        };
+        if !fields.is_empty() {
+            return Err(invalid("unknown account key update field"));
+        }
+        update.validate()?;
+        Ok(update)
+    }
+}
+
+/// Successful response from `PUT /sync/v1/keys`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SyncAccountKeyBundlePutResponse {
+    /// Revision stored by the server.
+    pub revision: u64,
+}
+
+impl SyncAccountKeyBundlePutResponse {
+    /// Validate the returned revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a zero revision.
+    pub fn validate(self) -> Result<(), SyncCodecError> {
+        positive(self.revision, "key bundle revision")
+    }
+
+    /// Encode the successful response as `{revision}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the revision is invalid or CBOR encoding fails.
+    pub fn to_cbor(self) -> Result<Vec<u8>, SyncCodecError> {
+        self.validate()?;
+        let encoded = encode_map(vec![("revision", Value::UInt(self.revision))])?;
+        enforce_key_body_limit(&encoded)?;
+        Ok(encoded)
+    }
+
+    /// Decode the response, ignoring additive extension fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed or invalid CBOR.
+    pub fn from_cbor(input: &[u8]) -> Result<Self, SyncCodecError> {
+        enforce_key_body_limit(input)?;
+        let mut fields = decode_map(input)?;
+        let response = Self { revision: take_uint(&mut fields, "revision")? };
+        response.validate()?;
+        Ok(response)
+    }
+}
+
+/// Endpoint-oriented aliases for consumers that call the resource simply `keys`.
+pub type SyncKeysResponse = SyncAccountKeyBundle;
+/// Endpoint-oriented alias for a key-bundle update request.
+pub type SyncKeysUpdate = SyncAccountKeyBundleUpdate;
+/// Endpoint-oriented alias for a successful key-bundle update response.
+pub type SyncKeysUpdateResponse = SyncAccountKeyBundlePutResponse;
+/// Alias for the nested device wrap type.
+pub type SyncKeysDeviceWrap = SyncAccountDeviceWrap;
+
+/// Build the account-key signature input from a signed update.
+///
+/// This free function mirrors [`SyncAccountKeyBundleUpdate::signature_input`] for consumers that
+/// prefer a functional helper at the HTTP adapter boundary.
+///
+/// # Errors
+///
+/// Returns an error when the update's unsigned fields are invalid or cannot be encoded.
+pub fn sync_keys_signature_input(
+    update: &SyncAccountKeyBundleUpdate,
+) -> Result<Vec<u8>, SyncCodecError> {
+    update.signature_input()
+}
+
 fn validate_page(
     entries: &[SyncChange],
     next_cursor: u64,
@@ -1127,6 +1479,112 @@ fn validate_page(
 
 fn invalid(message: impl Into<String>) -> SyncCodecError {
     SyncCodecError::Invalid(message.into())
+}
+
+fn validate_key_artifact(value: &[u8], key: &str) -> Result<(), SyncCodecError> {
+    if value.is_empty() {
+        return Err(invalid(format!("{key} must not be empty")));
+    }
+    if value.len() > MAX_SYNC_KEY_ARTIFACT_BYTES {
+        return Err(invalid(format!("{key} exceeds {MAX_SYNC_KEY_ARTIFACT_BYTES} bytes")));
+    }
+    Ok(())
+}
+
+fn validate_sorted_artifacts(values: &[Vec<u8>], key: &str) -> Result<(), SyncCodecError> {
+    if values.windows(2).any(|pair| pair[0].as_slice() > pair[1].as_slice()) {
+        return Err(invalid(format!("{key} must be sorted lexicographically")));
+    }
+    for value in values {
+        validate_key_artifact(value, key)?;
+    }
+    Ok(())
+}
+
+fn enforce_key_body_limit(input: &[u8]) -> Result<(), SyncCodecError> {
+    if input.len() > MAX_SYNC_KEY_BODY_BYTES {
+        return Err(invalid(format!("key bundle body exceeds {MAX_SYNC_KEY_BODY_BYTES} bytes")));
+    }
+    Ok(())
+}
+
+fn take_key_artifact(
+    fields: &mut BTreeMap<String, Value>,
+    key: &str,
+) -> Result<Vec<u8>, SyncCodecError> {
+    let value = match fields.remove(key) {
+        Some(Value::Bytes(value)) => value,
+        Some(_) => return Err(invalid(format!("{key} must be a byte string"))),
+        None => return Err(invalid(format!("missing {key}"))),
+    };
+    validate_key_artifact(&value, key)?;
+    Ok(value)
+}
+
+fn take_exact_bytes(
+    fields: &mut BTreeMap<String, Value>,
+    key: &str,
+    expected: usize,
+) -> Result<Vec<u8>, SyncCodecError> {
+    let value = match fields.remove(key) {
+        Some(Value::Bytes(value)) => value,
+        Some(_) => return Err(invalid(format!("{key} must be a byte string"))),
+        None => return Err(invalid(format!("missing {key}"))),
+    };
+    if value.len() != expected {
+        return Err(invalid(format!("{key} must be exactly {expected} bytes")));
+    }
+    Ok(value)
+}
+
+fn take_key_artifacts(
+    fields: &mut BTreeMap<String, Value>,
+    key: &str,
+) -> Result<Vec<Vec<u8>>, SyncCodecError> {
+    let values = match fields.remove(key) {
+        Some(Value::Array(values)) => values,
+        Some(_) => return Err(invalid(format!("{key} must be an array"))),
+        None => return Err(invalid(format!("missing {key}"))),
+    };
+    let artifacts = values
+        .into_iter()
+        .map(|value| match value {
+            Value::Bytes(value) => {
+                validate_key_artifact(&value, key)?;
+                Ok(value)
+            }
+            _ => Err(invalid(format!("{key} entries must be byte strings"))),
+        })
+        .collect::<Result<Vec<_>, SyncCodecError>>()?;
+    validate_sorted_artifacts(&artifacts, key)?;
+    Ok(artifacts)
+}
+
+fn encode_key_bundle_update(
+    update: &SyncAccountKeyBundleUpdate,
+    include_signature: bool,
+) -> Result<Vec<u8>, SyncCodecError> {
+    let mut entries = vec![
+        ("revision", Value::UInt(update.revision)),
+        (
+            "device_wraps",
+            Value::Array(
+                update
+                    .device_wraps
+                    .iter()
+                    .cloned()
+                    .map(SyncAccountDeviceWrap::into_value)
+                    .collect(),
+            ),
+        ),
+        ("account_signing_key", Value::Bytes(update.account_signing_key.clone())),
+        ("account_kem_key", Value::Bytes(update.account_kem_key.clone())),
+        ("recovery_blob", Value::Bytes(update.recovery_blob.clone())),
+    ];
+    if include_signature {
+        entries.push(("signature", Value::Bytes(update.signature.clone())));
+    }
+    encode_map(entries)
 }
 
 fn canonical_decimal(value: &str, key: &str) -> Result<u64, SyncCodecError> {

@@ -35,6 +35,14 @@ device revocation uses the boolean marker `{device_revoked: true}` until the spe
 an event payload. UUIDs are encoded as 16-byte UUIDv7 strings, and all expected values are
 deterministic CBOR in lowercase hexadecimal.
 
+`sync-keys.json` contains the K-4 account key-bundle vectors from `07-sync-protocol.md` §8.1 and
+D-50. The GET response uses opaque non-empty artifact hex strings and lexicographically sorted
+certificate and revocation arrays. The PUT request uses one sorted device wrap per device, a
+synthetic fixed-width 64-byte signature, and the same deterministic map encoding for the exact
+replay vector. The signature-input vector covers the `spl-sync-keys-v1` domain prefix and unsigned
+map bytes. The successful PUT response is `{revision}`. These vectors exercise transport encoding
+only; key authenticity is owned by `scoplen-crypto`.
+
 `crypto.json` contains K-2 known answers. All private keys and plaintexts in this document are
 synthetic, public test material and must never be used for real data. Every binary field is
 lowercase hexadecimal; fields in `input` are separated by `|`. Decimal integer fields and the

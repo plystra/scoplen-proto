@@ -21,9 +21,9 @@ legacy opt-in. It does not yet establish SSH connections; transport, authenticat
 strict key exchange, and interoperability work remain open.
 The `scoplen-api` crate exposes the K-3 error-code registry, RFC 9457 problem details, and device
 challenge, signed-device request, and token response JSON codecs, plus K-4 session, change-feed,
-write-batch, acknowledgement, snapshot, version-history, and content-free notification codecs in
-JSON and deterministic CBOR. OpenAPI resources, Cedar schema, gateway tickets, and protobuf
-contracts remain open.
+write-batch, acknowledgement, snapshot, version-history, content-free notification, and account
+key-bundle codecs in JSON and deterministic CBOR. OpenAPI resources, Cedar schema, gateway tickets,
+and protobuf contracts remain open.
 
 ## Repository shape
 
@@ -32,7 +32,8 @@ The Cargo workspace contains `scoplen-ssh`, `scoplen-model`, `scoplen-crypto`, `
 in `vectors/crypto.json`. The published K-3 auth and API problem, sync session, change-feed, and
 remaining K-4 message vectors are in `vectors/api-auth.json`, `vectors/api-problem.json`,
 `vectors/sync-session.json`, `vectors/sync-changes.json`, `vectors/sync-messages.json`, and
-`vectors/sync-notifications.json`. The shared loader is usable by both workstreams.
+`vectors/sync-notifications.json`, and `vectors/sync-keys.json`. The shared loader is usable by
+both workstreams.
 
 ## Development
 
