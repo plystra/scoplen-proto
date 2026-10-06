@@ -5,6 +5,9 @@ Each vector has a stable `id`, a contract-specific `kind`, and opaque `input` an
 The loader in `scoplen-test-vectors` validates the envelope and identifiers; the contract crate that
 owns a kind validates its encoding and interprets the values.
 
-The baseline document includes K-1 vectors for a shortest-form map, NFC text, and the field merge
-clock rule. Contract-specific vector kinds and additional canonical encodings are added with the
-corresponding contract gate and are consumed by both client and server workstreams.
+The baseline document includes K-1 vectors for shortest-form maps, NFC text, the complete CBOR
+negative-integer range, and an executable object merge. `model.cbor` vectors use hexadecimal CBOR
+for both `input` and `expected`. `model.merge` vectors use two hexadecimal object envelopes joined
+by `|` in `input`, with the expected merged envelope in `expected`. Contract-specific vector kinds
+and additional canonical encodings are added with the corresponding contract gate and are
+consumed by both client and server workstreams.

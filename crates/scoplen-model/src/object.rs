@@ -18,6 +18,8 @@ pub const MAX_MAP_ENTRIES: usize = 4_096;
 pub const MAX_TEXT_BYTES: usize = 16 * 1024;
 /// Maximum number of bytes in a workspace layout field.
 pub const MAX_WORKSPACE_LAYOUT_BYTES: usize = 64 * 1024;
+/// Schema version implemented by every type currently in the registry.
+pub const CURRENT_SCHEMA_VERSION: u64 = 1;
 
 /// The stable type number carried in an object envelope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -179,6 +181,7 @@ impl Object {
     /// Create an empty object envelope.
     pub fn new(id: Uuid, object_type: ObjectType, schema: u64) -> Result<Self, ModelError> {
         clock::validate_uuid_v7(id).map_err(ModelError::Clock)?;
+        validate_schema(object_type, schema)?;
         Ok(Self { id, object_type, schema, fields: BTreeMap::new(), tombstone: None })
     }
 
@@ -224,6 +227,7 @@ impl Object {
     /// Validate the registry-specific required fields and all model limits.
     pub fn validate(&self) -> Result<(), ModelError> {
         clock::validate_uuid_v7(self.id).map_err(ModelError::Clock)?;
+        validate_schema(self.object_type, self.schema)?;
         for (path, entry) in &self.fields {
             validate_field_path(path)?;
             validate_value(&entry.value, 0, None)?;
@@ -434,6 +438,24 @@ pub enum ModelError {
     /// A field map exceeded its entry limit.
     #[error("object field map exceeds the entry limit")]
     MapLimit,
+    /// A schema version of zero is reserved and cannot be used.
+    #[error("schema version {schema} for {object_type} is invalid")]
+    InvalidSchemaVersion {
+        /// The affected object type.
+        object_type: ObjectType,
+        /// The invalid version.
+        schema: u64,
+    },
+    /// A known type was encoded with a schema newer than this implementation understands.
+    #[error("schema version {schema} for {object_type} is newer than supported version {current}")]
+    UnsupportedSchemaVersion {
+        /// The affected object type.
+        object_type: ObjectType,
+        /// The version received on the wire.
+        schema: u64,
+        /// The newest version implemented by this crate.
+        current: u64,
+    },
     /// A value used a text size larger than the model permits.
     #[error("text value exceeds the 16 KiB limit")]
     TextLimit,
@@ -448,6 +470,20 @@ pub enum ModelError {
         /// A stable human-readable validation reason.
         reason: &'static str,
     },
+}
+
+fn validate_schema(object_type: ObjectType, schema: u64) -> Result<(), ModelError> {
+    if schema == 0 {
+        return Err(ModelError::InvalidSchemaVersion { object_type, schema });
+    }
+    if object_type.is_known() && schema > CURRENT_SCHEMA_VERSION {
+        return Err(ModelError::UnsupportedSchemaVersion {
+            object_type,
+            schema,
+            current: CURRENT_SCHEMA_VERSION,
+        });
+    }
+    Ok(())
 }
 
 fn validate_field_path(path: &FieldPath) -> Result<(), ModelError> {
@@ -1218,6 +1254,36 @@ mod tests {
     }
 
     #[test]
+    fn enforces_known_schema_versions_and_round_trips_future_types() {
+        assert_eq!(
+            Object::new(id(11), ObjectType::HOST, 0),
+            Err(ModelError::InvalidSchemaVersion { object_type: ObjectType::HOST, schema: 0 })
+        );
+
+        let mut too_new = host();
+        too_new.schema = CURRENT_SCHEMA_VERSION + 1;
+        assert_eq!(
+            too_new.validate(),
+            Err(ModelError::UnsupportedSchemaVersion {
+                object_type: ObjectType::HOST,
+                schema: CURRENT_SCHEMA_VERSION + 1,
+                current: CURRENT_SCHEMA_VERSION,
+            })
+        );
+
+        let future_type = ObjectType::from_wire(99).expect("future type");
+        let mut future = Object::new(id(12), future_type, 7).expect("future object");
+        future
+            .insert(
+                FieldPath::field(99).expect("path"),
+                FieldEntry::new(cbor::Value::Bool(true), Hlc::at(1).expect("clock"), id(2))
+                    .expect("entry"),
+            )
+            .expect("insert");
+        assert_eq!(Object::decode(&future.encode().expect("encode")).expect("decode"), future);
+    }
+
+    #[test]
     fn rejects_malformed_envelope_shapes() {
         let entry = || {
             cbor::Value::Array(vec![
@@ -1290,6 +1356,9 @@ mod tests {
 
     #[test]
     fn enforces_text_map_and_workspace_limits() {
+        let exactly_text = cbor::Value::Text("x".repeat(MAX_TEXT_BYTES));
+        FieldEntry::new(exactly_text, Hlc::at(1).expect("clock"), id(2))
+            .expect("the text limit is inclusive");
         let too_long = cbor::Value::Text("x".repeat(MAX_TEXT_BYTES + 1));
         assert_eq!(
             FieldEntry::new(too_long, Hlc::at(1).expect("clock"), id(2))
@@ -1328,14 +1397,110 @@ mod tests {
             .insert(
                 FieldPath::field(2).expect("path"),
                 FieldEntry::new(
-                    cbor::Value::Bytes(vec![0; MAX_WORKSPACE_LAYOUT_BYTES + 1]),
+                    cbor::Value::Bytes(vec![0; MAX_WORKSPACE_LAYOUT_BYTES]),
                     Hlc::at(2).expect("clock"),
                     id(2),
                 )
                 .expect("entry"),
             )
             .expect("insert");
+        workspace.encode().expect("the workspace layout limit is inclusive");
+        workspace
+            .insert(
+                FieldPath::field(2).expect("path"),
+                FieldEntry::new(
+                    cbor::Value::Bytes(vec![0; MAX_WORKSPACE_LAYOUT_BYTES + 1]),
+                    Hlc::at(3).expect("clock"),
+                    id(2),
+                )
+                .expect("entry"),
+            )
+            .expect("replace layout");
         assert_eq!(workspace.encode(), Err(ModelError::WorkspaceLayoutLimit));
+    }
+
+    #[test]
+    fn enforces_field_map_and_nested_map_limits_at_the_boundary() {
+        let mut object = Object::new(
+            id(13),
+            ObjectType::from_wire(99).expect("future type"),
+            CURRENT_SCHEMA_VERSION,
+        )
+        .expect("object");
+        for field in 1..=MAX_MAP_ENTRIES as u64 {
+            object
+                .insert(
+                    FieldPath::field(field).expect("path"),
+                    FieldEntry::new(cbor::Value::Null, Hlc::at(field).expect("clock"), id(2))
+                        .expect("entry"),
+                )
+                .expect("the field-map limit is inclusive");
+        }
+        assert_eq!(object.fields.len(), MAX_MAP_ENTRIES);
+        assert_eq!(
+            object.insert(
+                FieldPath::field(MAX_MAP_ENTRIES as u64 + 1).expect("path"),
+                FieldEntry::new(cbor::Value::Null, Hlc::at(5_000).expect("clock"), id(2))
+                    .expect("entry"),
+            ),
+            Err(ModelError::MapLimit)
+        );
+
+        let at_limit = cbor::Value::Map(
+            (0..MAX_MAP_ENTRIES)
+                .map(|key| (cbor::Value::UInt(key as u64), cbor::Value::Null))
+                .collect(),
+        );
+        FieldEntry::new(at_limit, Hlc::at(1).expect("clock"), id(2))
+            .expect("the nested map limit is inclusive");
+        let over_limit = cbor::Value::Map(
+            (0..=MAX_MAP_ENTRIES)
+                .map(|key| (cbor::Value::UInt(key as u64), cbor::Value::Null))
+                .collect(),
+        );
+        assert_eq!(
+            FieldEntry::new(over_limit, Hlc::at(1).expect("clock"), id(2)),
+            Err(ModelError::MapLimit)
+        );
+    }
+
+    #[test]
+    fn enforces_encoded_object_limit_at_the_boundary() {
+        fn object_with_payload(length: usize) -> Object {
+            let mut object = Object::new(
+                id(14),
+                ObjectType::from_wire(99).expect("future type"),
+                CURRENT_SCHEMA_VERSION,
+            )
+            .expect("object");
+            object
+                .insert(
+                    FieldPath::field(1).expect("path"),
+                    FieldEntry::new(
+                        cbor::Value::Bytes(vec![0; length]),
+                        Hlc::at(1).expect("clock"),
+                        id(2),
+                    )
+                    .expect("entry"),
+                )
+                .expect("insert");
+            object
+        }
+
+        let mut lower = 0;
+        let mut upper = MAX_OBJECT_BYTES + 1;
+        while upper - lower > 1 {
+            let middle = lower + (upper - lower) / 2;
+            if object_with_payload(middle).encode().is_ok() {
+                lower = middle;
+            } else {
+                upper = middle;
+            }
+        }
+        let encoded = object_with_payload(lower).encode().expect("largest valid object");
+        assert_eq!(encoded.len(), MAX_OBJECT_BYTES);
+        assert_eq!(object_with_payload(upper).encode(), Err(ModelError::ObjectLimit));
+        assert_eq!(Object::decode(&vec![0; MAX_OBJECT_BYTES + 1]), Err(ModelError::ObjectLimit));
     }
 
     #[test]

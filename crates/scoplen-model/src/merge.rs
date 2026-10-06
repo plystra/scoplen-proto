@@ -236,14 +236,12 @@ mod tests {
         (
             proptest::collection::vec(any::<char>(), 0..64),
             0_u64..=1_000,
-            any::<u64>(),
             any::<bool>(),
             prop::option::of(0_u64..=1_000),
         )
-            .prop_map(move |(name, clock, schema, favorite, tombstone_clock)| {
+            .prop_map(move |(name, clock, favorite, tombstone_clock)| {
                 let name: String = name.into_iter().collect::<String>().nfc().collect();
                 let mut object = object(&name, clock, origin);
-                object.schema = schema;
                 object
                     .insert(
                         FieldPath::field(6).expect("path"),
@@ -303,31 +301,62 @@ mod tests {
     #[test]
     fn merge_is_commutative_associative_and_idempotent() {
         let left = object("left", 1, 2);
-        let mut middle = object("middle", 2, 3);
-        middle.schema = 2;
+        let middle = object("middle", 2, 3);
         let right = object("right", 3, 4);
         let lm = merge(&left, &middle).expect("merge");
         let ml = merge(&middle, &left).expect("merge");
         assert_eq!(lm, ml);
-        assert_eq!(lm.schema, 2);
+        assert_eq!(lm.schema, 1);
         assert_eq!(merge(&left, &left).expect("idempotent"), left);
         assert_eq!(
             merge(&merge(&left, &middle).expect("left-middle"), &right).expect("associative"),
             merge(&left, &merge(&middle, &right).expect("middle-right")).expect("associative")
         );
-        let path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors/baseline.json");
-        let vector = scoplen_test_vectors::VectorDocument::from_path(path)
-            .expect("vectors")
-            .vectors
-            .into_iter()
-            .find(|vector| vector.kind == "model.merge")
-            .expect("merge vector");
-        assert_eq!(vector.expected, "higher-clock");
         assert_eq!(
             merge(&left, &middle).expect("higher clock").required_text(1).expect("merged name"),
             "middle"
         );
+    }
+
+    #[test]
+    fn matches_published_known_answer_merge_vectors() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors/baseline.json");
+        let document = scoplen_test_vectors::VectorDocument::from_path(path).expect("vectors");
+        for vector in document.vectors.iter().filter(|vector| vector.kind == "model.merge") {
+            let (local, remote) = vector.input.split_once('|').expect("merge vector inputs");
+            let local = Object::decode(&decode_hex(local)).expect("local object");
+            let remote = Object::decode(&decode_hex(remote)).expect("remote object");
+            let expected = decode_hex(&vector.expected);
+            assert_eq!(merge(&local, &remote).expect("merge").encode().expect("encode"), expected);
+        }
+    }
+
+    #[test]
+    fn preserves_the_highest_schema_for_unknown_types() {
+        let future_type = ObjectType::from_wire(99).expect("future type");
+        let mut local = Object::new(id(20), future_type, 1).expect("local");
+        local
+            .insert(
+                FieldPath::field(1).expect("path"),
+                FieldEntry::new(Value::Null, Hlc::at(1).expect("clock"), id(2)).expect("entry"),
+            )
+            .expect("insert");
+        let mut remote = local.clone();
+        remote.schema = 7;
+        assert_eq!(merge(&local, &remote).expect("merge").schema, 7);
+    }
+
+    fn decode_hex(input: &str) -> Vec<u8> {
+        assert_eq!(input.len() % 2, 0, "hex vector has an odd length");
+        input
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                let text = std::str::from_utf8(pair).expect("ASCII hex");
+                u8::from_str_radix(text, 16).expect("hex byte")
+            })
+            .collect()
     }
 
     #[test]
