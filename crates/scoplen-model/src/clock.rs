@@ -6,7 +6,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use thiserror::Error;
-use uuid::Uuid;
+use uuid::{Uuid, Variant};
 
 /// The largest physical timestamp representable in the 48-bit HLC prefix.
 pub const MAX_PHYSICAL_MILLIS: u64 = (1 << 48) - 1;
@@ -103,10 +103,15 @@ impl Hlc {
         remote: Self,
         now_millis: u64,
     ) -> Result<Self, ClockError> {
-        let physical =
-            now_millis.max(previous.map_or(0, Self::physical_millis)).max(remote.physical_millis());
+        let previous_physical = previous.map_or(0, Self::physical_millis);
+        let remote_physical = remote.physical_millis();
+        let physical = now_millis.max(previous_physical).max(remote_physical);
         if physical > MAX_PHYSICAL_MILLIS {
             return Err(ClockError::PhysicalOverflow);
+        }
+
+        if now_millis > previous_physical && now_millis > remote_physical {
+            return Self::at(now_millis);
         }
 
         let counter = match (
@@ -141,7 +146,11 @@ pub fn new_uuid_v7() -> Result<Uuid, ClockError> {
 
 /// Ensure an identifier is a UUIDv7 value before it enters the object model.
 pub fn validate_uuid_v7(id: Uuid) -> Result<(), ClockError> {
-    if id.get_version_num() == 7 { Ok(()) } else { Err(ClockError::NotUuidV7) }
+    if id.get_version_num() == 7 && id.get_variant() == Variant::RFC4122 {
+        Ok(())
+    } else {
+        Err(ClockError::NotUuidV7)
+    }
 }
 
 /// Reject a local write when the wall clock leads the server by more than 24 hours.
@@ -174,11 +183,45 @@ mod tests {
     }
 
     #[test]
+    fn wall_clock_advance_resets_the_logical_counter() {
+        let first = Hlc::new(100, u16::MAX).expect("clock");
+        let next = Hlc::tick(Some(first), 101).expect("clock after wall-clock advance");
+        assert_eq!(next, Hlc::at(101).expect("advanced clock"));
+    }
+
+    #[test]
     fn observe_is_after_remote_and_local() {
         let local = Hlc::new(100, 4).expect("local");
         let remote = Hlc::new(100, 9).expect("remote");
         let merged = Hlc::observe(Some(local), remote, 100).expect("merged");
         assert_eq!(merged, Hlc::new(100, 10).expect("next clock"));
+    }
+
+    #[test]
+    fn observe_advances_past_a_remote_physical_time() {
+        let local = Hlc::new(100, 4).expect("local");
+        let remote = Hlc::new(200, u16::MAX).expect("remote");
+        let merged = Hlc::observe(Some(local), remote, 100).expect("merged");
+        assert_eq!(merged, Hlc::new(201, 0).expect("next clock"));
+    }
+
+    #[test]
+    fn observe_uses_wall_clock_when_it_is_ahead() {
+        let local = Hlc::new(100, u16::MAX).expect("local");
+        let remote = Hlc::new(90, u16::MAX).expect("remote");
+        let merged = Hlc::observe(Some(local), remote, 200).expect("merged");
+        assert_eq!(merged, Hlc::at(200).expect("wall-clock time"));
+    }
+
+    #[test]
+    fn rejects_physical_clock_overflow() {
+        assert_eq!(Hlc::at(MAX_PHYSICAL_MILLIS + 1), Err(ClockError::PhysicalOverflow));
+        let last = Hlc::new(MAX_PHYSICAL_MILLIS, u16::MAX).expect("last clock");
+        assert_eq!(Hlc::tick(Some(last), MAX_PHYSICAL_MILLIS), Err(ClockError::PhysicalOverflow));
+        assert_eq!(
+            Hlc::observe(Some(last), last, MAX_PHYSICAL_MILLIS),
+            Err(ClockError::PhysicalOverflow)
+        );
     }
 
     #[test]
@@ -193,5 +236,13 @@ mod tests {
     #[test]
     fn generated_identifier_is_uuidv7() {
         validate_uuid_v7(new_uuid_v7().expect("UUIDv7")).expect("UUIDv7 validation");
+    }
+
+    #[test]
+    fn rejects_uuidv7_with_a_non_rfc4122_variant() {
+        let mut bytes = [0; 16];
+        bytes[6] = 0x70;
+        bytes[8] = 0x40;
+        assert_eq!(validate_uuid_v7(Uuid::from_bytes(bytes)), Err(ClockError::NotUuidV7));
     }
 }
