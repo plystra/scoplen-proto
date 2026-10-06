@@ -15,3 +15,9 @@ All notable changes to `scoplen-proto` will be recorded here.
   recipients, with malformed-input and authentication failure tests.
 - Published executable K-2 known-answer vectors for primitives, signatures, HPKE opening, key
   wrapping, signed certificates and envelopes, recovery, Shamir, escrow, and safety numbers.
+- Added K-7 client algorithm preferences with explicit per-Host legacy selection and host
+  certificate preference; SSH transport and negotiation remain unimplemented.
+- Added the stable HTTP error-code registry and RFC 9457 problem details with JSON and deterministic
+  CBOR codecs, including malformed-input tests and a published CBOR vector.
+- Added deterministic K-4 sync session request and response codecs, validation of limits and vault
+  identifiers, forward-compatible vault kinds, and published session vectors.

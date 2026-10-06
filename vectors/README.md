@@ -39,3 +39,14 @@ The HPKE seal operations use fresh randomness, so their published known answers 
 fixed ciphertexts. The test suite separately exercises sealing and tamper rejection. The local
 database wrapper vector uses 8 MiB and one pass to keep CI practical; production defaults remain
 256 MiB, three passes, and four lanes.
+
+`api-problem.json` contains an `api.problem.cbor` vector. Its `input` is the JSON form of an RFC
+9457 problem with all eight required Scoplen fields; `expected` is the deterministic CBOR body in
+lowercase hexadecimal. The `scoplen-api` tests exercise the public JSON and CBOR contract, including
+unknown error-code preservation and malformed-body rejection.
+
+`sync-session.json` contains `sync.session.request` and `sync.session.response` vectors. Each
+`input` is a JSON description of the typed K-4 session value; `expected` is deterministic CBOR in
+lowercase hexadecimal. UUIDs are written as canonical text in the vector input and encoded as
+16-byte CBOR byte strings. The public codec tests consume both vectors and reject missing fields,
+invalid limits, duplicate vaults, and malformed nested values.
