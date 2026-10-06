@@ -8,3 +8,6 @@ description = "Scoplen's shared SSH protocol core."
 
 [lints]
 workspace = true
+
+[dependencies]
+thiserror.workspace = true
