@@ -22,5 +22,8 @@ thiserror.workspace = true
 uuid.workspace = true
 zeroize = { version = "1.8.1", features = ["derive"] }
 
+[dev-dependencies]
+scoplen-test-vectors = { path = "../scoplen-test-vectors", version = "0.1.0" }
+
 [lints]
 workspace = true

@@ -11,3 +11,31 @@ for both `input` and `expected`. `model.merge` vectors use two hexadecimal objec
 by `|` in `input`, with the expected merged envelope in `expected`. Contract-specific vector kinds
 and additional canonical encodings are added with the corresponding contract gate and are
 consumed by both client and server workstreams.
+
+`crypto.json` contains K-2 known answers. All private keys and plaintexts in this document are
+synthetic, public test material and must never be used for real data. Every binary field is
+lowercase hexadecimal; fields in `input` are separated by `|`. Decimal integer fields and the
+recovery display and safety-number outputs are written as text.
+
+| Kind | Input fields, in order | Expected |
+| --- | --- | --- |
+| `crypto.hkdf-sha256` | IKM, salt, info, output length | Derived bytes (RFC 5869 case 1) |
+| `crypto.xchacha20poly1305` | key, nonce, plaintext, AAD | ciphertext and tag |
+| `crypto.p256-signature` | private scalar, message | uncompressed public key, fixed-width signature |
+| `crypto.ed25519-signature` | private seed, message | public key, signature |
+| `crypto.hpke-account-open`, `crypto.hpke-device-open` | recipient private key, encapsulated key, info, AAD, ciphertext | plaintext |
+| `crypto.device-key-wrap-open` | device private key, encapsulated key, info, AAD, ciphertext | 32-byte unwrapped key |
+| `crypto.device-certificate` | account signing seed, device UUID, account UUID, device signing scalar, device KEM private key, UTF-8 name, UTF-8 platform, Unix milliseconds | signed deterministic CBOR |
+| `crypto.device-revocation` | account signing seed, device UUID, Unix milliseconds, UTF-8 reason | signed deterministic CBOR |
+| `crypto.object-envelope` | vault UUID, epoch, K-1 object CBOR, vault key, signer UUID, P-256 signing scalar, nonce | signed encrypted envelope |
+| `crypto.recovery-display` | raw recovery key | `SPL1-` display with checksum |
+| `crypto.recovery-blob` | raw recovery key, account UUID, ARK, nonce | encoded wrapped ARK |
+| `crypto.shamir-split` | secret, threshold, share count, coefficient bytes | serialized shares, separated by `|` |
+| `crypto.safety-number` | two Ed25519 public keys | twelve decimal digits |
+| `crypto.local-db-key` | UTF-8 passphrase, database key, Argon2 memory KiB, time cost, parallelism, salt, nonce | encoded Argon2id wrapper |
+| `crypto.escrow-account-open`, `crypto.escrow-device-open` | recipient private key, encapsulated key, ciphertext | serialized authenticated Shamir share |
+
+The HPKE seal operations use fresh randomness, so their published known answers exercise opening
+fixed ciphertexts. The test suite separately exercises sealing and tamper rejection. The local
+database wrapper vector uses 8 MiB and one pass to keep CI practical; production defaults remain
+256 MiB, three passes, and four lanes.

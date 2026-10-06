@@ -13,3 +13,5 @@ All notable changes to `scoplen-proto` will be recorded here.
   XChaCha20-Poly1305, HKDF-SHA-256, and the specified Argon2id derivation.
 - Added P-256 and Ed25519 signing wrappers and HPKE base-mode wrapping for device and account
   recipients, with malformed-input and authentication failure tests.
+- Published executable K-2 known-answer vectors for primitives, signatures, HPKE opening, key
+  wrapping, signed certificates and envelopes, recovery, Shamir, escrow, and safety numbers.

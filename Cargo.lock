@@ -741,6 +741,7 @@ dependencies = [
  "p256",
  "rand_core",
  "scoplen-model",
+ "scoplen-test-vectors",
  "sha2",
  "subtle",
  "thiserror",
