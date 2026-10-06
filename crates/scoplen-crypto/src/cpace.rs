@@ -17,6 +17,7 @@ use rand_core_010::{CryptoRng, UnwrapErr};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
 use uuid::Uuid;
+use zeroize::Zeroize;
 
 use crate::{
     PrimitiveError, SecretBytes, SymmetricKey, XChaChaNonce, hkdf_sha256, random_bytes,
@@ -437,8 +438,8 @@ impl PairingSession {
         info.extend_from_slice(CONFIRMATION_INFO_PREFIX);
         info.extend_from_slice(&self.session_id);
         info.extend_from_slice(self.role.label());
-        let value = hkdf_sha256(self.isk.as_ref(), Some(self.context.sid()), &info, 32)?;
-        value.try_into().map_err(|_| PairingError::InvalidOutput)
+        let value = derive_secret::<32>(&self.isk, self.context.sid(), &info)?;
+        Ok(*value.as_bytes())
     }
 
     /// Constant-time compare a peer confirmation against the expected role.
@@ -463,8 +464,8 @@ impl PairingSession {
         info.extend_from_slice(CONFIRMATION_INFO_PREFIX);
         info.extend_from_slice(&self.session_id);
         info.extend_from_slice(peer.label());
-        let value = hkdf_sha256(self.isk.as_ref(), Some(self.context.sid()), &info, 32)?;
-        value.try_into().map_err(|_| PairingError::InvalidOutput)
+        let value = derive_secret::<32>(&self.isk, self.context.sid(), &info)?;
+        Ok(*value.as_bytes())
     }
 
     /// Encrypt a frame with a fresh operating-system nonce.
@@ -591,8 +592,18 @@ fn derive_channel_key(
     let mut info = Vec::with_capacity(CHANNEL_INFO_PREFIX.len() + session_id.len());
     info.extend_from_slice(CHANNEL_INFO_PREFIX);
     info.extend_from_slice(session_id);
-    let value = hkdf_sha256(isk.as_ref(), Some(sid), &info, 32)?;
-    SecretBytes::from_slice(&value).ok_or(PairingError::InvalidOutput)
+    derive_secret(isk, sid, &info)
+}
+
+fn derive_secret<const N: usize>(
+    isk: &SecretBytes<64>,
+    sid: &[u8; 16],
+    info: &[u8],
+) -> Result<SecretBytes<N>, PairingError> {
+    let mut value = hkdf_sha256(isk.as_ref(), Some(sid), info, N)?;
+    let secret = SecretBytes::from_slice(&value).ok_or(PairingError::InvalidOutput);
+    value.zeroize();
+    secret
 }
 
 fn map_cpace_error(error: &CpaceError) -> PairingError {
