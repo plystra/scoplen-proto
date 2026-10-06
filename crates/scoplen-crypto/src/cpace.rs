@@ -9,6 +9,7 @@
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use getrandom_04::SysRng;
 use pakery_cpace::{CpaceError, CpaceInitiator, CpaceMode, CpaceResponder, InitiatorState};
@@ -91,6 +92,9 @@ pub enum PairingError {
     /// The peer's confirmation did not match the transcript.
     #[error("pairing confirmation mismatch")]
     ConfirmationMismatch,
+    /// The payload channel was used before the peer confirmation was checked.
+    #[error("pairing confirmation required before payload exchange")]
+    ConfirmationRequired,
     /// The frame is too short to contain a nonce and an authentication tag.
     #[error("pairing frame is truncated")]
     FrameTruncated,
@@ -372,6 +376,7 @@ pub struct PairingSession {
     // Nonces are tracked for both directions.  This makes accidental reuse
     // under one channel key observable even when a caller supplies a nonce.
     used_nonces: Mutex<HashSet<[u8; 24]>>,
+    confirmed: AtomicBool,
 }
 
 impl fmt::Debug for PairingSession {
@@ -407,6 +412,7 @@ impl PairingSession {
             isk,
             channel_key,
             used_nonces: Mutex::new(HashSet::new()),
+            confirmed: AtomicBool::new(false),
         })
     }
 
@@ -453,6 +459,7 @@ impl PairingSession {
         if peer.len() != expected.len() || !bool::from(expected.ct_eq(peer)) {
             return Err(PairingError::ConfirmationMismatch);
         }
+        self.confirmed.store(true, Ordering::Release);
         Ok(())
     }
 
@@ -476,9 +483,12 @@ impl PairingSession {
     ///
     /// # Errors
     ///
-    /// Returns [`PairingError::Randomness`] when a fresh nonce cannot be
-    /// generated, or an authentication error if the primitive fails.
+    /// Returns [`PairingError::ConfirmationRequired`] until the peer
+    /// confirmation has been verified, [`PairingError::Randomness`] when a
+    /// fresh nonce cannot be generated, or an authentication error if the
+    /// primitive fails.
     pub fn seal_frame(&self, plaintext: &[u8]) -> Result<Vec<u8>, PairingError> {
+        self.ensure_confirmed()?;
         loop {
             let nonce = random_nonce()?;
             if self
@@ -503,12 +513,15 @@ impl PairingSession {
     ///
     /// # Errors
     ///
-    /// Returns [`PairingError::NonceReuse`] when the nonce was already used.
+    /// Returns [`PairingError::ConfirmationRequired`] until the peer
+    /// confirmation has been verified, or [`PairingError::NonceReuse`] when
+    /// the nonce was already used.
     pub fn seal_frame_with_nonce(
         &self,
         plaintext: &[u8],
         nonce: &XChaChaNonce,
     ) -> Result<Vec<u8>, PairingError> {
+        self.ensure_confirmed()?;
         let mut used = self.used_nonces.lock().map_err(|_| PairingError::Authentication)?;
         if !used.insert(*nonce.as_bytes()) {
             return Err(PairingError::NonceReuse);
@@ -537,7 +550,8 @@ impl PairingSession {
     ///
     /// # Errors
     ///
-    /// Returns [`PairingError::FrameTruncated`],
+    /// Returns [`PairingError::ConfirmationRequired`] until the peer
+    /// confirmation has been verified, [`PairingError::FrameTruncated`],
     /// [`PairingError::WrongRole`], [`PairingError::NonceReuse`], or
     /// [`PairingError::Authentication`] when the frame cannot be accepted.
     pub fn open_frame(
@@ -545,6 +559,7 @@ impl PairingSession {
         peer_role: PairingRole,
         frame: &[u8],
     ) -> Result<Vec<u8>, PairingError> {
+        self.ensure_confirmed()?;
         if peer_role == self.role {
             return Err(PairingError::WrongRole);
         }
@@ -581,6 +596,14 @@ impl PairingSession {
         aad.extend_from_slice(self.context.sid());
         aad.extend_from_slice(&self.session_id);
         aad
+    }
+
+    fn ensure_confirmed(&self) -> Result<(), PairingError> {
+        if self.confirmed.load(Ordering::Acquire) {
+            Ok(())
+        } else {
+            Err(PairingError::ConfirmationRequired)
+        }
     }
 }
 
@@ -689,20 +712,36 @@ mod tests {
         let initiator = initiator.finish(&responder_share).expect("finish");
 
         assert_eq!(initiator.session_id(), responder.session_id());
+        let nonce = XChaChaNonce::new([9; 24]);
+        assert_eq!(
+            initiator.seal_frame(b"device package"),
+            Err(PairingError::ConfirmationRequired)
+        );
+        assert_eq!(
+            initiator.seal_frame_with_nonce(b"device package", &nonce),
+            Err(PairingError::ConfirmationRequired)
+        );
+        assert_eq!(
+            responder.open_frame(PairingRole::Initiator, &[0; 40]),
+            Err(PairingError::ConfirmationRequired)
+        );
         let initiator_confirmation = initiator.confirmation().expect("confirmation");
         let responder_confirmation = responder.confirmation().expect("confirmation");
+        assert_eq!(
+            responder.verify_peer_confirmation(&[0; 32]),
+            Err(PairingError::ConfirmationMismatch)
+        );
+        assert_eq!(
+            responder.seal_frame_with_nonce(b"device package", &nonce),
+            Err(PairingError::ConfirmationRequired)
+        );
         initiator
             .verify_peer_confirmation(&responder_confirmation)
             .expect("initiator confirmation");
         responder
             .verify_peer_confirmation(&initiator_confirmation)
             .expect("responder confirmation");
-        assert_eq!(
-            responder.verify_peer_confirmation(&[0; 32]),
-            Err(PairingError::ConfirmationMismatch)
-        );
 
-        let nonce = XChaChaNonce::new([9; 24]);
         let frame = initiator.seal_frame_with_nonce(b"device package", &nonce).expect("seal");
         assert_eq!(
             responder.open_frame(PairingRole::Initiator, &frame).expect("open"),
