@@ -10,6 +10,7 @@ mod envelope;
 mod escrow;
 mod hpke;
 mod keys;
+mod pairing;
 mod primitives;
 mod recovery;
 mod secret;
@@ -31,6 +32,7 @@ pub use keys::{
     VaultKeyEpoch, generate_account_keys, generate_device_keys, generate_symmetric_key,
     generate_vault_epoch, unwrap_key_from_device, wrap_key_to_device,
 };
+pub use pairing::{PairingQrError, PairingQrPayload};
 pub use primitives::{
     ARGON2_MEMORY_KIB, ARGON2_PARALLELISM, ARGON2_TIME_COST, Argon2idParams, PrimitiveError,
     argon2id_derive, argon2id_derive_with_params, hkdf_sha256, random_bytes, random_key,

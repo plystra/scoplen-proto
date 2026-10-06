@@ -5,9 +5,9 @@ use std::{collections::BTreeSet, fmt::Write as _, path::Path};
 
 use scoplen_crypto::{
     AccountKemKeyPair, Argon2idParams, DeviceCertificate, DeviceKemKeyPair, Ed25519SigningKey,
-    HpkeCiphertext, LocalDatabaseKeyEnvelope, ObjectEnvelope, P256SigningKey, PrimitiveError,
-    RecoveryBlob, RecoveryKey, RevocationStatement, SecretBytes, ShamirShare, XChaChaNonce,
-    combine_shamir, ed25519_verify, hkdf_sha256, hpke_open_account, hpke_open_device,
+    HpkeCiphertext, LocalDatabaseKeyEnvelope, ObjectEnvelope, P256SigningKey, PairingQrPayload,
+    PrimitiveError, RecoveryBlob, RecoveryKey, RevocationStatement, SecretBytes, ShamirShare,
+    XChaChaNonce, combine_shamir, ed25519_verify, hkdf_sha256, hpke_open_account, hpke_open_device,
     open_escrow_share_from_account, open_escrow_share_from_device, p256_verify, safety_number,
     split_shamir_with_randomness, unwrap_key_from_device, xchacha20poly1305_open,
     xchacha20poly1305_seal,
@@ -341,12 +341,23 @@ fn fixture(kind: &str, input: &str, expected: &str) {
                 Err(PrimitiveError::Authentication)
             );
         }
-        other => panic!("unhandled K-2 vector kind: {other}"),
+        "crypto.qr-pairing" => {
+            let f = fields(input, 3);
+            let pairing_id = uuid(f[0]);
+            let kem = unhex(f[1]);
+            let signing = unhex(f[2]);
+            let payload = PairingQrPayload::new(pairing_id, &kem, &signing).expect("QR payload");
+            assert_eq!(payload.encode(), expected);
+            let decoded = PairingQrPayload::decode(expected).expect("QR decode");
+            assert_eq!(decoded.pairing_id(), pairing_id);
+            decoded.verify_public_keys(&kem, &signing).expect("relay keys match QR");
+        }
+        other => panic!("unhandled crypto vector kind: {other}"),
     }
 }
 
 #[test]
-fn published_k2_known_answers() {
+fn published_crypto_known_answers() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors/crypto.json");
     let document = VectorDocument::from_path(path).expect("K-2 vector document");
     let mut kinds = BTreeSet::new();
@@ -375,6 +386,7 @@ fn published_k2_known_answers() {
                 "crypto.local-db-key",
                 "crypto.escrow-account-open",
                 "crypto.escrow-device-open",
+                "crypto.qr-pairing",
             ]
             .map(str::to_owned)
         )

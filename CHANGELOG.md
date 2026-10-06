@@ -15,3 +15,5 @@ All notable changes to `scoplen-proto` will be recorded here.
   recipients, with malformed-input and authentication failure tests.
 - Published executable K-2 known-answer vectors for primitives, signatures, HPKE opening, key
   wrapping, signed certificates and envelopes, recovery, Shamir, escrow, and safety numbers.
+- Added the K-3 QR pairing payload, strict parser, and constant-time verification of relayed
+  device keys against a published known-answer vector.
