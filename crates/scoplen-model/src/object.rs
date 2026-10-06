@@ -916,6 +916,24 @@ mod tests {
     }
 
     #[test]
+    fn object_round_trips_tombstones_and_binary_map_keys() {
+        let mut object = host();
+        object
+            .insert(
+                FieldPath::map_entry(99, MapKey::Bytes(vec![1, 2, 3])).expect("path"),
+                FieldEntry::new(cbor::Value::Null, Hlc::at(3).expect("clock"), id(2))
+                    .expect("entry"),
+            )
+            .expect("insert");
+        object.set_tombstone(Some(
+            Tombstone::new(Hlc::at(4).expect("clock"), id(3)).expect("tombstone"),
+        ));
+
+        let bytes = object.encode().expect("encode");
+        assert_eq!(Object::decode(&bytes).expect("decode"), object);
+    }
+
+    #[test]
     fn map_entries_encode_as_distinct_paths() {
         let mut object = host();
         for (key, clock) in [("a", 3), ("b", 4)] {
@@ -949,6 +967,55 @@ mod tests {
             Object::new(id, ObjectType::HOST, 1),
             Err(ModelError::Clock(clock::ClockError::NotUuidV7))
         ));
+    }
+
+    #[test]
+    fn rejects_malformed_envelope_shapes() {
+        let entry = || {
+            cbor::Value::Array(vec![
+                cbor::Value::Bool(true),
+                cbor::Value::UInt(Hlc::at(1).expect("clock").to_wire()),
+                cbor::Value::Bytes(id(2).into_bytes().to_vec()),
+            ])
+        };
+        let envelope = |fields| {
+            cbor::Value::Map(vec![
+                (cbor::Value::UInt(1), cbor::Value::Bytes(id(1).into_bytes().to_vec())),
+                (cbor::Value::UInt(2), cbor::Value::UInt(99)),
+                (cbor::Value::UInt(3), cbor::Value::UInt(1)),
+                (cbor::Value::UInt(4), cbor::Value::Map(fields)),
+            ])
+        };
+
+        assert_eq!(
+            Object::from_value(cbor::Value::Array(vec![])),
+            Err(ModelError::InvalidEnvelope)
+        );
+        assert_eq!(
+            Object::from_value(cbor::Value::Map(vec![])),
+            Err(ModelError::MissingEnvelopeField(1))
+        );
+        assert_eq!(
+            Object::from_value(envelope(vec![(cbor::Value::UInt(0), entry(),)])),
+            Err(ModelError::InvalidFieldPath)
+        );
+        assert_eq!(
+            Object::from_value(envelope(vec![(
+                cbor::Value::UInt(1),
+                cbor::Value::Array(vec![cbor::Value::Bool(true)]),
+            )])),
+            Err(ModelError::InvalidEnvelope)
+        );
+        assert_eq!(
+            Object::from_value(cbor::Value::Map(vec![
+                (cbor::Value::UInt(1), cbor::Value::Bytes(id(1).into_bytes().to_vec())),
+                (cbor::Value::UInt(2), cbor::Value::UInt(99)),
+                (cbor::Value::UInt(3), cbor::Value::UInt(1)),
+                (cbor::Value::UInt(4), cbor::Value::Map(vec![])),
+                (cbor::Value::UInt(6), cbor::Value::Null),
+            ])),
+            Err(ModelError::UnknownEnvelopeField(6))
+        );
     }
 
     #[test]
