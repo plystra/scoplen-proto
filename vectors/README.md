@@ -41,6 +41,14 @@ recovery display and safety-number outputs are written as text.
 | `crypto.local-db-key` | UTF-8 passphrase, database key, Argon2 memory KiB, time cost, parallelism, salt, nonce | encoded Argon2id wrapper |
 | `crypto.escrow-account-open`, `crypto.escrow-device-open` | recipient private key, encapsulated key, ciphertext | serialized authenticated Shamir share |
 | `crypto.qr-pairing` | pairing UUIDv7, P-256 KEM public key, P-256 signing public key | canonical `splpair1:` QR text |
+| `crypto.cpace-pairing` | pairing UUIDv7, initiator and responder UUIDv7, code, initiator and responder RNG bytes, nonce, plaintext | initiator share, responder share, 64-byte CPace session id, both confirmations, and nonce-prefixed XChaCha frame |
+
+The `crypto.cpace-pairing` expected fields are lowercase hexadecimal and are
+separated by `|` in this order: initiator share, responder share, session id,
+initiator confirmation, responder confirmation, and the frame (`nonce ||
+ciphertext || tag`).  Its fixed context and role ordering are the K-3
+typed-code contract from `06-identity-and-authentication.md` §2; the RNG fields
+make the published shares reproducible without exposing production secrets.
 
 The HPKE seal operations use fresh randomness, so their published known answers exercise opening
 fixed ciphertexts. The test suite separately exercises sealing and tamper rejection. The local
