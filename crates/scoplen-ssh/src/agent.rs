@@ -17,6 +17,7 @@ const SIGN_REQUEST: u8 = 13;
 const SIGN_RESPONSE: u8 = 14;
 const FAILURE: u8 = 5;
 const SUCCESS: u8 = 6;
+const REMOVE_IDENTITY: u8 = 18;
 const REMOVE_ALL_IDENTITIES: u8 = 19;
 const LOCK: u8 = 22;
 const UNLOCK: u8 = 23;
@@ -113,6 +114,8 @@ pub enum AgentMessage {
     SignResponse { signature: Vec<u8> },
     /// Remove every identity currently held by the agent.
     RemoveAllIdentities,
+    /// Remove one identity matching an exact public-key blob.
+    RemoveIdentity { key_blob: Vec<u8> },
     /// Lock the agent with a passphrase.
     Lock { passphrase: Vec<u8> },
     /// Unlock the agent with a passphrase.
@@ -192,6 +195,11 @@ impl AgentMessage {
                 validate_blob(signature, MAX_AGENT_KEY_BLOB, "signature")?;
                 payload.push(SIGN_RESPONSE);
                 append_string(&mut payload, signature, MAX_AGENT_KEY_BLOB, "signature")?;
+            }
+            Self::RemoveIdentity { key_blob } => {
+                validate_blob(key_blob, MAX_AGENT_KEY_BLOB, "key blob")?;
+                payload.push(REMOVE_IDENTITY);
+                append_string(&mut payload, key_blob, MAX_AGENT_KEY_BLOB, "key blob")?;
             }
             Self::RemoveAllIdentities => payload.push(REMOVE_ALL_IDENTITIES),
             Self::Lock { passphrase } => {
@@ -331,6 +339,12 @@ impl<C: AgentChannel> AgentClient<C> {
         self.expect_success(&AgentMessage::RemoveAllIdentities)
     }
 
+    /// Remove one identity matching an exact public-key blob.
+    pub fn remove_identity(&mut self, key_blob: &[u8]) -> Result<(), AgentError> {
+        validate_blob(key_blob, MAX_AGENT_KEY_BLOB, "key blob")?;
+        self.expect_success(&AgentMessage::RemoveIdentity { key_blob: key_blob.to_vec() })
+    }
+
     /// Lock the agent with a bounded passphrase.
     pub fn lock(&mut self, passphrase: &[u8]) -> Result<(), AgentError> {
         validate_size(passphrase, MAX_AGENT_PASSPHRASE, "passphrase")?;
@@ -377,6 +391,11 @@ pub trait AgentKeyStore {
         Err(AgentError::AgentFailure)
     }
 
+    /// Remove one identity matching an exact public-key blob.
+    fn remove_identity(&self, _key_blob: &[u8]) -> Result<(), AgentError> {
+        Err(AgentError::AgentFailure)
+    }
+
     /// Lock the store with a passphrase.
     fn lock(&self, _passphrase: &[u8]) -> Result<(), AgentError> {
         Err(AgentError::AgentFailure)
@@ -417,6 +436,12 @@ impl<S: AgentKeyStore> AgentServer<S> {
                 Ok(()) => AgentMessage::Success,
                 Err(_) => AgentMessage::Failure,
             },
+            AgentMessage::RemoveIdentity { key_blob } => {
+                match self.store.remove_identity(&key_blob) {
+                    Ok(()) => AgentMessage::Success,
+                    Err(_) => AgentMessage::Failure,
+                }
+            }
             AgentMessage::Lock { passphrase } => match self.store.lock(&passphrase) {
                 Ok(()) => AgentMessage::Success,
                 Err(_) => AgentMessage::Failure,
@@ -503,6 +528,14 @@ fn decode_payload(payload: &[u8]) -> Result<AgentMessage, AgentError> {
             }
             validate_blob(signature, MAX_AGENT_KEY_BLOB, "signature")?;
             Ok(AgentMessage::SignResponse { signature: signature.to_vec() })
+        }
+        REMOVE_IDENTITY => {
+            let (key_blob, trailing) = read_string(rest, MAX_AGENT_KEY_BLOB, "key blob")?;
+            if !trailing.is_empty() {
+                return Err(AgentError::MalformedFrame("remove identity payload"));
+            }
+            validate_blob(key_blob, MAX_AGENT_KEY_BLOB, "key blob")?;
+            Ok(AgentMessage::RemoveIdentity { key_blob: key_blob.to_vec() })
         }
         REMOVE_ALL_IDENTITIES if rest.is_empty() => Ok(AgentMessage::RemoveAllIdentities),
         REMOVE_ALL_IDENTITIES => Err(AgentError::MalformedFrame("remove all identities payload")),
@@ -629,6 +662,14 @@ mod tests {
 
         fn remove_all_identities(&self) -> Result<(), AgentError> {
             Ok(())
+        }
+
+        fn remove_identity(&self, key_blob: &[u8]) -> Result<(), AgentError> {
+            if key_blob == self.identity.key_blob() {
+                Ok(())
+            } else {
+                Err(AgentError::AgentFailure)
+            }
         }
 
         fn lock(&self, _passphrase: &[u8]) -> Result<(), AgentError> {
@@ -777,6 +818,7 @@ mod tests {
                 identities: vec![AgentIdentity::new(KEY, b"work key").expect("identity")],
             },
             AgentMessage::SignResponse { signature: b"signature".to_vec() },
+            AgentMessage::RemoveIdentity { key_blob: KEY.to_vec() },
             AgentMessage::RemoveAllIdentities,
             AgentMessage::Lock { passphrase: b"secret".to_vec() },
             AgentMessage::Unlock { passphrase: b"secret".to_vec() },
@@ -802,6 +844,7 @@ mod tests {
             b"signed payload"
         );
         client.remove_all_identities().expect("remove all");
+        client.remove_identity(KEY).expect("remove identity");
         client.lock(b"secret").expect("lock");
         client.unlock(b"secret").expect("unlock");
     }
@@ -876,5 +919,6 @@ mod tests {
             client.lock(&vec![0; MAX_AGENT_PASSPHRASE + 1]),
             Err(AgentError::FieldTooLarge("passphrase"))
         );
+        assert_eq!(client.remove_identity(&[]), Err(AgentError::MalformedFrame("key blob")));
     }
 }

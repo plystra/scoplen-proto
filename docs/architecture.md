@@ -37,3 +37,6 @@ also dispatched with opaque failure mapping. The concrete SSH transport, remaini
 methods, channels, SFTP, and interoperability work remain open. The agent server can consume
 multiple bounded frames from a blocking stream through clean peer close while applying the same
 malformed and oversized-frame checks.
+The supported management surface includes exact-key removal in addition to remove-all, lock, and
+unlock; private-key add-identity and smart-card operations remain intentionally outside this
+opaque boundary until their algorithm-specific fields have a dedicated contract.

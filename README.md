@@ -32,6 +32,8 @@ The client and server boundary also supports bounded remove-all, lock, and unloc
 requests with opaque failure mapping; add-identity, Pageant, and forwarding remain open.
 The server boundary can serve multiple bounded frames from a blocking stream until clean peer
 close and rejects oversized input before allocation.
+Exact-key remove-identity requests are also supported with bounded public-key blobs; add-identity,
+smart-card operations, Pageant, and forwarding remain open.
 The `scoplen-api` crate exposes the K-3 error-code registry, RFC 9457 problem details, and device
 challenge, signed-device request, and token response JSON codecs, plus K-4 session, change-feed,
 write-batch, acknowledgement, snapshot, version-history, content-free notification, and account
