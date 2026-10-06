@@ -17,6 +17,7 @@ pub const CONTRACTS: &[&str] = &["K-3", "K-4", "K-5", "K-6"];
 
 /// Stable error-code strings defined by the initial K-3/K-4/K-5 registry.
 pub const ERROR_CODES: &[&str] = &[
+    "auth.authentication_required",
     "auth.client_unsupported",
     "auth.device_revoked",
     "policy.denied",
@@ -24,8 +25,10 @@ pub const ERROR_CODES: &[&str] = &[
     "sync.conflict",
     "sync.cursor_ahead",
     "sync.cursor_expired",
+    "sync.invalid_request",
     "sync.object_not_found",
     "sync.read_only",
+    "sync.storage_unavailable",
 ];
 
 /// Errors returned while constructing or validating API contract values.
@@ -348,8 +351,13 @@ mod tests {
 
     #[test]
     fn unknown_codes_are_preserved_and_invalid_syntax_is_rejected() {
+        assert!(
+            ErrorCode::new("auth.authentication_required").expect("registered code").is_known()
+        );
         assert!(ErrorCode::new("sync.cursor_ahead").expect("registered code").is_known());
+        assert!(ErrorCode::new("sync.invalid_request").expect("registered code").is_known());
         assert!(ErrorCode::new("sync.object_not_found").expect("registered code").is_known());
+        assert!(ErrorCode::new("sync.storage_unavailable").expect("registered code").is_known());
         let code = ErrorCode::new("future.new_code").expect("syntactically valid unknown code");
         assert!(!code.is_known());
         let json = serde_json::to_string(&code).expect("serialize");
