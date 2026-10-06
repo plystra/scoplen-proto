@@ -7,6 +7,8 @@
 
 #![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 
+use std::io::{Read, Write};
+
 use thiserror::Error;
 
 const REQUEST_IDENTITIES: u8 = 11;
@@ -191,6 +193,72 @@ impl AgentMessage {
 pub trait AgentChannel {
     /// Exchange one complete request frame for one complete response frame.
     fn exchange(&mut self, request: &[u8]) -> Result<Vec<u8>, AgentError>;
+}
+
+/// A length-prefixed agent channel over any blocking byte stream.
+pub struct FramedAgentChannel<S> {
+    stream: S,
+}
+
+impl<S> FramedAgentChannel<S> {
+    /// Wrap a stream that carries SSH agent frames.
+    #[must_use]
+    pub fn new(stream: S) -> Self {
+        Self { stream }
+    }
+
+    /// Return the wrapped byte stream.
+    #[must_use]
+    pub fn into_inner(self) -> S {
+        self.stream
+    }
+}
+
+impl<S: Read + Write> AgentChannel for FramedAgentChannel<S> {
+    fn exchange(&mut self, request: &[u8]) -> Result<Vec<u8>, AgentError> {
+        AgentMessage::decode_frame(request)?;
+        self.stream.write_all(request).map_err(|error| AgentError::Transport(error.to_string()))?;
+        self.stream.flush().map_err(|error| AgentError::Transport(error.to_string()))?;
+
+        let mut header = [0; 4];
+        self.stream
+            .read_exact(&mut header)
+            .map_err(|error| AgentError::Transport(error.to_string()))?;
+        let length =
+            usize::try_from(u32::from_be_bytes(header)).map_err(|_| AgentError::FrameTooLarge)?;
+        if length == 0 {
+            return Err(AgentError::MalformedFrame("empty agent payload"));
+        }
+        if length > MAX_AGENT_FRAME {
+            return Err(AgentError::FrameTooLarge);
+        }
+        let mut response = Vec::with_capacity(4 + length);
+        response.extend_from_slice(&header);
+        response.resize(4 + length, 0);
+        self.stream
+            .read_exact(&mut response[4..])
+            .map_err(|error| AgentError::Transport(error.to_string()))?;
+        AgentMessage::decode_frame(&response)?;
+        Ok(response)
+    }
+}
+
+/// Connect to an OpenSSH agent through a Unix-domain socket.
+#[cfg(unix)]
+pub fn connect_unix_agent(
+    path: impl AsRef<std::path::Path>,
+) -> std::io::Result<AgentClient<FramedAgentChannel<std::os::unix::net::UnixStream>>> {
+    let stream = std::os::unix::net::UnixStream::connect(path)?;
+    Ok(AgentClient::new(FramedAgentChannel::new(stream)))
+}
+
+/// Connect to an OpenSSH-compatible agent through a Windows named pipe.
+#[cfg(windows)]
+pub fn connect_windows_agent(
+    path: impl AsRef<std::path::Path>,
+) -> std::io::Result<AgentClient<FramedAgentChannel<std::fs::File>>> {
+    let stream = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
+    Ok(AgentClient::new(FramedAgentChannel::new(stream)))
 }
 
 /// SSH agent client operations shared by Unix, Windows, and Pageant adapters.
@@ -439,6 +507,79 @@ mod tests {
         fn exchange(&mut self, request: &[u8]) -> Result<Vec<u8>, AgentError> {
             self.server.dispatch_frame(request)
         }
+    }
+
+    struct ScriptedStream {
+        response: Vec<u8>,
+        response_offset: usize,
+        written: Vec<u8>,
+        max_read: usize,
+    }
+
+    impl ScriptedStream {
+        fn new(response: Vec<u8>, max_read: usize) -> Self {
+            Self { response, response_offset: 0, written: Vec::new(), max_read }
+        }
+    }
+
+    impl Read for ScriptedStream {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if self.response_offset == self.response.len() {
+                return Ok(0);
+            }
+            let available = self.response.len() - self.response_offset;
+            let count = available.min(buffer.len()).min(self.max_read);
+            buffer[..count].copy_from_slice(
+                &self.response[self.response_offset..self.response_offset + count],
+            );
+            self.response_offset += count;
+            Ok(count)
+        }
+    }
+
+    impl Write for ScriptedStream {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.written.extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn framed_stream_channel_handles_fragmented_response_and_preserves_request() {
+        let response = AgentMessage::IdentitiesAnswer {
+            identities: vec![AgentIdentity::new(KEY, b"work key").expect("identity")],
+        }
+        .encode_frame()
+        .expect("response");
+        let stream = ScriptedStream::new(response, 2);
+        let mut client = AgentClient::new(FramedAgentChannel::new(stream));
+        assert_eq!(client.identities().expect("identities").len(), 1);
+
+        let stream = client.into_inner().into_inner();
+        assert_eq!(
+            AgentMessage::decode_frame(&stream.written).expect("request"),
+            AgentMessage::RequestIdentities
+        );
+    }
+
+    #[test]
+    fn framed_stream_channel_rejects_bad_request_before_writing_and_bounds_response() {
+        let mut channel = FramedAgentChannel::new(ScriptedStream::new(Vec::new(), 4));
+        assert_eq!(
+            channel.exchange(&[0, 0, 0, 0]),
+            Err(AgentError::MalformedFrame("empty agent payload"))
+        );
+        assert!(channel.into_inner().written.is_empty());
+
+        let oversized =
+            (u32::try_from(MAX_AGENT_FRAME).expect("test limit") + 1).to_be_bytes().to_vec();
+        let mut channel = FramedAgentChannel::new(ScriptedStream::new(oversized, 4));
+        let request = AgentMessage::RequestIdentities.encode_frame().expect("request");
+        assert_eq!(channel.exchange(&request), Err(AgentError::FrameTooLarge));
     }
 
     #[test]

@@ -30,5 +30,7 @@ only after validation. Security-key requests preserve the OpenSSH application, u
 user-verification flags, and authenticator counter while rejecting malformed or unbounded input.
 The agent boundary provides bounded request-identities and sign request/response codecs,
 transport-neutral client calls, and server dispatch that maps key-store errors to the opaque SSH
-agent failure response. Platform agent channels, agent forwarding, the concrete SSH transport,
-remaining authentication methods, channels, SFTP, and interoperability work remain open.
+agent failure response. `FramedAgentChannel` applies bounded read/write framing over a blocking
+stream, with platform constructors for Unix-domain sockets and Windows named pipes. Pageant
+compatibility, agent forwarding, the concrete SSH transport, remaining authentication methods,
+channels, SFTP, and interoperability work remain open.
