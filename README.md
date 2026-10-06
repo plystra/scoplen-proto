@@ -14,15 +14,17 @@ handling, per-object limits, merge properties, and executable known-answer vecto
 cryptographic, and wire behavior is added only from the canonical specifications in `scoplen-docs`;
 the S3 primitive boundary now includes zeroizing secret containers, operating-system randomness,
 XChaCha20-Poly1305, HKDF-SHA-256, Argon2id, P-256 and Ed25519 signatures, and HPKE key wrapping
-for device and account recipients. The `scoplen-ssh` crate now exposes K-7's ordered client
-algorithm policy with explicit per-Host legacy opt-in. It does not yet establish SSH connections;
-transport, authentication, channels, strict key exchange, and interoperability work remain open.
+for device and account recipients. The published K-2 known-answer set is exercised through the
+`scoplen-crypto` public API; S3 remains incomplete while pairing is unimplemented.
+The `scoplen-ssh` crate exposes K-7's ordered client algorithm policy with explicit per-Host
+legacy opt-in. It does not yet establish SSH connections; transport, authentication, channels,
+strict key exchange, and interoperability work remain open.
 
 ## Repository shape
 
 The Cargo workspace contains `scoplen-ssh`, `scoplen-model`, `scoplen-crypto`, `scoplen-api`, and
-`scoplen-test-vectors`. Contract-specific behavior and vectors are introduced in later roadmap
-gates; the vector loader is already usable by both workstreams.
+`scoplen-test-vectors`. K-1 vectors are in `vectors/baseline.json`; K-2 cryptographic vectors are
+in `vectors/crypto.json`. The shared loader is usable by both workstreams.
 
 ## Development
 
