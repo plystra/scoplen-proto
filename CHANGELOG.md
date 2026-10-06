@@ -44,6 +44,8 @@ All notable changes to `scoplen-proto` will be recorded here.
   CI fuzz-build job.
 - Redacted signed data and lock or unlock passphrases from `AgentMessage` debug output, with a
   regression test for the public logging surface.
+- Added a fail-closed per-profile forwarding policy and authorizer hook that gates every forwarded
+  signature before server dispatch, including framed-stream serving and allow or deny tests.
 - Added the stable HTTP error-code registry and RFC 9457 problem details with JSON and deterministic
   CBOR codecs, including malformed-input tests and a published CBOR vector.
 - Extended the stable error-code registry for authenticated sync HTTP adapters with

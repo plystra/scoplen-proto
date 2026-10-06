@@ -22,9 +22,9 @@ pub use agent::connect_unix_agent;
 pub use agent::connect_windows_agent;
 pub use agent::{
     AGENT_SIGN_FLAG_RSA_SHA2_256, AGENT_SIGN_FLAG_RSA_SHA2_512, AgentChannel, AgentClient,
-    AgentError, AgentIdentity, AgentKeyStore, AgentMessage, AgentServer, FramedAgentChannel,
-    MAX_AGENT_COMMENT, MAX_AGENT_FRAME, MAX_AGENT_IDENTITIES, MAX_AGENT_KEY_BLOB,
-    MAX_AGENT_SIGN_DATA,
+    AgentError, AgentForwardingAuthorizer, AgentForwardingPolicy, AgentIdentity, AgentKeyStore,
+    AgentMessage, AgentServer, FramedAgentChannel, MAX_AGENT_COMMENT, MAX_AGENT_FRAME,
+    MAX_AGENT_IDENTITIES, MAX_AGENT_KEY_BLOB, MAX_AGENT_SIGN_DATA,
 };
 pub use authentication::{
     CertificateKind, CertificateValidationError, CertificateValidationPolicy, Ed25519SshSigner,

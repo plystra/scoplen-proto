@@ -42,3 +42,6 @@ unlock; private-key add-identity and smart-card operations remain intentionally 
 opaque boundary until their algorithm-specific fields have a dedicated contract.
 Agent message debug output reports only bounded lengths and non-sensitive metadata, so signing
 payloads and lock credentials are not emitted through ordinary diagnostics.
+Forwarded agent serving uses an explicit per-profile policy that is disabled by default and invokes
+an authorizer for each signature before the key store; the SSH `auth-agent` channel integration is
+still open.

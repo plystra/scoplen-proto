@@ -334,6 +334,57 @@ pub struct AgentClient<C> {
     channel: C,
 }
 
+/// Authorizes one signature made through an explicitly forwarded agent.
+pub trait AgentForwardingAuthorizer {
+    /// Approve or reject a forwarded signature request.
+    fn authorize_signature(
+        &self,
+        key_blob: &[u8],
+        data: &[u8],
+        flags: u32,
+    ) -> Result<(), AgentError>;
+}
+
+/// Per-profile forwarding policy with a fail-closed default.
+pub struct AgentForwardingPolicy<A> {
+    authorizer: A,
+    enabled: bool,
+}
+
+impl<A> AgentForwardingPolicy<A> {
+    /// Create a policy with forwarding disabled.
+    #[must_use]
+    pub fn disabled(authorizer: A) -> Self {
+        Self { authorizer, enabled: false }
+    }
+
+    /// Create a policy with forwarding enabled and per-signature authorization required.
+    #[must_use]
+    pub fn enabled(authorizer: A) -> Self {
+        Self { authorizer, enabled: true }
+    }
+
+    /// Return whether this policy permits forwarded signatures to reach the authorizer.
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+}
+
+impl<A: AgentForwardingAuthorizer> AgentForwardingPolicy<A> {
+    fn authorize_signature(
+        &self,
+        key_blob: &[u8],
+        data: &[u8],
+        flags: u32,
+    ) -> Result<(), AgentError> {
+        if !self.enabled {
+            return Err(AgentError::AgentFailure);
+        }
+        self.authorizer.authorize_signature(key_blob, data, flags)
+    }
+}
+
 impl<C: AgentChannel> AgentClient<C> {
     /// Construct an agent client over a platform channel.
     #[must_use]
@@ -492,6 +543,20 @@ impl<S: AgentKeyStore> AgentServer<S> {
         }
     }
 
+    /// Dispatch a request received through an explicitly forwarded agent channel.
+    pub fn dispatch_forwarded<A: AgentForwardingAuthorizer>(
+        &self,
+        request: AgentMessage,
+        policy: &AgentForwardingPolicy<A>,
+    ) -> AgentMessage {
+        if let AgentMessage::SignRequest { ref key_blob, ref data, flags } = request {
+            if policy.authorize_signature(key_blob, data, flags).is_err() {
+                return AgentMessage::Failure;
+            }
+        }
+        self.dispatch(request)
+    }
+
     /// Decode, dispatch, and encode one complete request frame.
     pub fn dispatch_frame(&self, frame: &[u8]) -> Result<Vec<u8>, AgentError> {
         let request = AgentMessage::decode_frame(frame)?;
@@ -501,20 +566,39 @@ impl<S: AgentKeyStore> AgentServer<S> {
 
     /// Serve framed requests from a blocking stream until the peer closes it.
     pub fn serve<T: Read + Write>(&self, stream: &mut T) -> Result<(), AgentError> {
-        while let Some(frame) = read_stream_frame(stream)? {
-            let response = self.dispatch_frame(&frame)?;
-            stream
-                .write_all(&response)
-                .map_err(|error| AgentError::Transport(error.to_string()))?;
-            stream.flush().map_err(|error| AgentError::Transport(error.to_string()))?;
-        }
-        Ok(())
+        Self::serve_with(stream, |request| self.dispatch(request))
+    }
+
+    /// Serve forwarded requests while enforcing the per-signature forwarding policy.
+    pub fn serve_forwarded<T: Read + Write, A: AgentForwardingAuthorizer>(
+        &self,
+        stream: &mut T,
+        policy: &AgentForwardingPolicy<A>,
+    ) -> Result<(), AgentError> {
+        Self::serve_with(stream, |request| self.dispatch_forwarded(request, policy))
     }
 
     /// Return the backing key store.
     #[must_use]
     pub fn into_inner(self) -> S {
         self.store
+    }
+
+    fn serve_with<T: Read + Write, F: FnMut(AgentMessage) -> AgentMessage>(
+        stream: &mut T,
+        mut dispatch: F,
+    ) -> Result<(), AgentError> {
+        while let Some(frame) = read_stream_frame(stream)? {
+            let request = AgentMessage::decode_frame(&frame)?;
+            let response = dispatch(request);
+            let response =
+                response.encode_frame().or_else(|_| AgentMessage::Failure.encode_frame())?;
+            stream
+                .write_all(&response)
+                .map_err(|error| AgentError::Transport(error.to_string()))?;
+            stream.flush().map_err(|error| AgentError::Transport(error.to_string()))?;
+        }
+        Ok(())
     }
 }
 
@@ -719,6 +803,21 @@ mod tests {
         }
     }
 
+    struct Authorizer {
+        allowed: bool,
+    }
+
+    impl AgentForwardingAuthorizer for Authorizer {
+        fn authorize_signature(
+            &self,
+            _key_blob: &[u8],
+            _data: &[u8],
+            _flags: u32,
+        ) -> Result<(), AgentError> {
+            if self.allowed { Ok(()) } else { Err(AgentError::AgentFailure) }
+        }
+    }
+
     struct Loopback {
         server: AgentServer<Store>,
     }
@@ -902,6 +1001,47 @@ mod tests {
         assert_eq!(server.dispatch(request), AgentMessage::Failure);
         let mut client = AgentClient::new(Loopback { server });
         assert_eq!(client.sign(b"other key", b"payload", 0), Err(AgentError::AgentFailure));
+    }
+
+    #[test]
+    fn forwarded_signatures_fail_closed_and_require_authorization() {
+        let request = AgentMessage::SignRequest {
+            key_blob: KEY.to_vec(),
+            data: b"payload".to_vec(),
+            flags: AGENT_SIGN_FLAG_RSA_SHA2_512,
+        };
+        let server = AgentServer::new(Store {
+            identity: AgentIdentity::new(KEY, b"work key").expect("identity"),
+            signature: b"signed payload".to_vec(),
+        });
+
+        let disabled = AgentForwardingPolicy::disabled(Authorizer { allowed: true });
+        assert!(!disabled.is_enabled());
+        assert_eq!(server.dispatch_forwarded(request.clone(), &disabled), AgentMessage::Failure);
+
+        let denied = AgentForwardingPolicy::enabled(Authorizer { allowed: false });
+        assert!(denied.is_enabled());
+        assert_eq!(server.dispatch_forwarded(request.clone(), &denied), AgentMessage::Failure);
+
+        let allowed = AgentForwardingPolicy::enabled(Authorizer { allowed: true });
+        assert_eq!(
+            server.dispatch_forwarded(request, &allowed),
+            AgentMessage::SignResponse { signature: b"signed payload".to_vec() }
+        );
+
+        let request = AgentMessage::SignRequest {
+            key_blob: KEY.to_vec(),
+            data: b"payload".to_vec(),
+            flags: 0,
+        }
+        .encode_frame()
+        .expect("request");
+        let mut stream = ScriptedStream::new(request, 2);
+        server.serve_forwarded(&mut stream, &allowed).expect("forwarded serve");
+        assert_eq!(
+            AgentMessage::decode_frame(&stream.written).expect("response"),
+            AgentMessage::SignResponse { signature: b"signed payload".to_vec() }
+        );
     }
 
     #[test]

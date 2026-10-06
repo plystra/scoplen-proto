@@ -34,6 +34,8 @@ The server boundary can serve multiple bounded frames from a blocking stream unt
 close and rejects oversized input before allocation.
 Exact-key remove-identity requests are also supported with bounded public-key blobs; add-identity,
 smart-card operations, Pageant, and forwarding remain open.
+The forwarding boundary now fails closed by default and can require an authorizer for every
+forwarded signature before dispatch; the SSH `auth-agent` channel integration remains open.
 The `scoplen-api` crate exposes the K-3 error-code registry, RFC 9457 problem details, and device
 challenge, signed-device request, and token response JSON codecs, plus K-4 session, change-feed,
 write-batch, acknowledgement, snapshot, version-history, content-free notification, and account
