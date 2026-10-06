@@ -12,6 +12,12 @@ by `|` in `input`, with the expected merged envelope in `expected`. Contract-spe
 and additional canonical encodings are added with the corresponding contract gate and are
 consumed by both client and server workstreams.
 
+`sync-changes.json` contains K-4 change-feed vectors. Query inputs are JSON objects with `after`
+and `limit`; expected values are the canonical query string. Response inputs are JSON objects with
+`changes`, `next_cursor`, and `more`; payloads are lowercase hexadecimal and a missing signer is
+represented by JSON `null`. Response expected values are deterministic CBOR. Each response change
+entry uses integer map keys 1 through 5, as defined by `07-sync-protocol.md` §4.
+
 `crypto.json` contains K-2 known answers. All private keys and plaintexts in this document are
 synthetic, public test material and must never be used for real data. Every binary field is
 lowercase hexadecimal; fields in `input` are separated by `|`. Decimal integer fields and the

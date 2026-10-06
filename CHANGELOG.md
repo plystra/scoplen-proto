@@ -15,3 +15,5 @@ All notable changes to `scoplen-proto` will be recorded here.
   recipients, with malformed-input and authentication failure tests.
 - Published executable K-2 known-answer vectors for primitives, signatures, HPKE opening, key
   wrapping, signed certificates and envelopes, recovery, Shamir, escrow, and safety numbers.
+- Added K-4 change-feed query and response codecs with canonical pagination parameters, strict
+  ordering and cursor validation, failure-path coverage, and published deterministic CBOR vectors.

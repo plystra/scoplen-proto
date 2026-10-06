@@ -1,0 +1,30 @@
+{
+  "format": "scoplen-test-vectors",
+  "version": 1,
+  "vectors": [
+    {
+      "id": "sync-changes-query-zero-max-v1",
+      "kind": "sync.changes.query",
+      "input": "{\"after\":0,\"limit\":1000}",
+      "expected": "after=0&limit=1000"
+    },
+    {
+      "id": "sync-changes-query-snapshot-v1",
+      "kind": "sync.changes.query",
+      "input": "{\"after\":12,\"limit\":25}",
+      "expected": "after=12&limit=25"
+    },
+    {
+      "id": "sync-changes-response-page-v1",
+      "kind": "sync.changes.response",
+      "input": "{\"changes\":[{\"object_id\":\"00000000-0000-7000-8000-000000000001\",\"seq\":2,\"payload\":\"dead\",\"tombstone\":false,\"signer_device_id\":\"00000000-0000-7000-8000-000000000003\"},{\"object_id\":\"00000000-0000-7000-8000-000000000002\",\"seq\":5,\"payload\":\"beef\",\"tombstone\":true,\"signer_device_id\":null}],\"next_cursor\":5,\"more\":true}",
+      "expected": "a3646d6f7265f5676368616e67657382a501500000000000007000800000000000000102020342dead04f4055000000000000070008000000000000003a501500000000000007000800000000000000202050342beef04f505f66b6e6578745f637572736f7205"
+    },
+    {
+      "id": "sync-changes-response-final-empty-v1",
+      "kind": "sync.changes.response",
+      "input": "{\"changes\":[],\"next_cursor\":12,\"more\":false}",
+      "expected": "a3646d6f7265f4676368616e676573806b6e6578745f637572736f720c"
+    }
+  ]
+}

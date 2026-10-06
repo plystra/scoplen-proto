@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The K-4 session handshake, encoded with deterministic CBOR.
+//! K-4 sync wire messages and canonical change-feed query parameters.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -10,7 +10,7 @@ use scoplen_model::{
 use thiserror::Error;
 use uuid::Uuid;
 
-/// Errors at the K-4 session wire boundary.
+/// Errors at the K-4 sync wire boundary.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum SyncCodecError {
     /// The CBOR was malformed or not deterministic.
@@ -284,8 +284,237 @@ impl SyncSessionResponse {
     }
 }
 
+/// Query parameters for `GET /sync/v1/vaults/{vault}/changes`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SyncChangesQuery {
+    /// Highest sequence already applied by the caller.
+    pub after: u64,
+    /// Maximum number of change entries in one page.
+    pub limit: u16,
+}
+
+impl SyncChangesQuery {
+    /// Validate the change-feed page size.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `limit` is outside 1 through 1,000.
+    pub fn validate(&self) -> Result<(), SyncCodecError> {
+        if (1..=1_000).contains(&self.limit) {
+            Ok(())
+        } else {
+            Err(invalid("limit must be between 1 and 1000"))
+        }
+    }
+
+    /// Format the canonical query string, without a leading `?`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid page size.
+    pub fn to_query(&self) -> Result<String, SyncCodecError> {
+        self.validate()?;
+        Ok(format!("after={}&limit={}", self.after, self.limit))
+    }
+
+    /// Parse required canonical decimal parameters in either order.
+    ///
+    /// `input` is the raw query string without a leading `?`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for missing, duplicate, unknown, malformed, or out-of-range parameters.
+    pub fn from_query(input: &str) -> Result<Self, SyncCodecError> {
+        let (mut after, mut limit) = (None, None);
+        for parameter in input.split('&') {
+            let (key, value) =
+                parameter.split_once('=').ok_or_else(|| invalid("invalid query parameter"))?;
+            match key {
+                "after" if after.is_none() => after = Some(canonical_decimal(value, "after")?),
+                "limit" if limit.is_none() => {
+                    let value = canonical_decimal(value, "limit")?;
+                    limit =
+                        Some(u16::try_from(value).map_err(|_| invalid("limit is out of range"))?);
+                }
+                "after" | "limit" => return Err(invalid("duplicate query parameter")),
+                _ => return Err(invalid("unknown query parameter")),
+            }
+        }
+        let query = Self {
+            after: after.ok_or_else(|| invalid("missing after"))?,
+            limit: limit.ok_or_else(|| invalid("missing limit"))?,
+        };
+        query.validate()?;
+        Ok(query)
+    }
+}
+
+/// One latest object version in a change-feed page.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncChange {
+    pub object_id: Uuid,
+    pub seq: u64,
+    /// Opaque encrypted envelope, or a deterministic CBOR organization object.
+    pub payload: Vec<u8>,
+    pub tombstone: bool,
+    /// `None` for organization objects.
+    pub signer_device_id: Option<Uuid>,
+}
+
+impl SyncChange {
+    fn validate(&self) -> Result<(), SyncCodecError> {
+        valid_uuid(self.object_id, "object id")?;
+        positive(self.seq, "change seq")?;
+        if let Some(id) = self.signer_device_id {
+            valid_uuid(id, "signer device id")?;
+        }
+        Ok(())
+    }
+
+    fn into_value(self) -> Value {
+        Value::Map(vec![
+            (Value::UInt(1), Value::Bytes(self.object_id.as_bytes().to_vec())),
+            (Value::UInt(2), Value::UInt(self.seq)),
+            (Value::UInt(3), Value::Bytes(self.payload)),
+            (Value::UInt(4), Value::Bool(self.tombstone)),
+            (
+                Value::UInt(5),
+                self.signer_device_id
+                    .map_or(Value::Null, |id| Value::Bytes(id.as_bytes().to_vec())),
+            ),
+        ])
+    }
+
+    fn from_value(value: Value) -> Result<Self, SyncCodecError> {
+        let mut fields = expect_integer_map(value)?;
+        let change = Self {
+            object_id: decode_uuid(take_integer(&mut fields, 1)?, "object id")?,
+            seq: decode_uint(&take_integer(&mut fields, 2)?, "change seq")?,
+            payload: decode_bytes(take_integer(&mut fields, 3)?, "payload")?,
+            tombstone: decode_bool(&take_integer(&mut fields, 4)?, "tombstone")?,
+            signer_device_id: match take_integer(&mut fields, 5)? {
+                Value::Null => None,
+                value => Some(decode_uuid(value, "signer device id")?),
+            },
+        };
+        change.validate()?;
+        Ok(change)
+    }
+}
+
+/// Response body for `GET /sync/v1/vaults/{vault}/changes`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncChangesResponse {
+    pub changes: Vec<SyncChange>,
+    pub next_cursor: u64,
+    pub more: bool,
+}
+
+impl SyncChangesResponse {
+    /// Validate structural page invariants independent of the request and vault snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid entries, ordering, duplicate objects, or cursor shape.
+    pub fn validate(&self) -> Result<(), SyncCodecError> {
+        if self.changes.len() > 1_000 {
+            return Err(invalid("changes exceeds 1000 entries"));
+        }
+        let mut ids = BTreeSet::new();
+        let mut previous_seq = 0;
+        for change in &self.changes {
+            change.validate()?;
+            if change.seq <= previous_seq {
+                return Err(invalid("changes must have strictly increasing sequence numbers"));
+            }
+            if !ids.insert(change.object_id) {
+                return Err(invalid("duplicate change object id"));
+            }
+            previous_seq = change.seq;
+        }
+        if self.next_cursor < previous_seq {
+            return Err(invalid("next_cursor precedes a returned change"));
+        }
+        if self.more && (self.changes.is_empty() || self.next_cursor != previous_seq) {
+            return Err(invalid("non-final page cursor must equal its last change sequence"));
+        }
+        Ok(())
+    }
+
+    /// Validate a page against the request that produced it.
+    ///
+    /// The caller must separately verify that a final page cursor equals the server's snapshot
+    /// sequence; that server-only value is not present in this wire message.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the page exceeds `limit`, includes old entries, or regresses the cursor.
+    pub fn validate_for_query(&self, query: &SyncChangesQuery) -> Result<(), SyncCodecError> {
+        query.validate()?;
+        self.validate()?;
+        if self.changes.len() > usize::from(query.limit) {
+            return Err(invalid("changes exceeds requested limit"));
+        }
+        if self.next_cursor < query.after
+            || self.changes.first().is_some_and(|change| change.seq <= query.after)
+        {
+            return Err(invalid("change page precedes after cursor"));
+        }
+        Ok(())
+    }
+
+    /// Encode the page as deterministic CBOR.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid page or non-encodable CBOR.
+    pub fn to_cbor(&self) -> Result<Vec<u8>, SyncCodecError> {
+        self.validate()?;
+        encode_map(vec![
+            (
+                "changes",
+                Value::Array(self.changes.iter().cloned().map(SyncChange::into_value).collect()),
+            ),
+            ("next_cursor", Value::UInt(self.next_cursor)),
+            ("more", Value::Bool(self.more)),
+        ])
+    }
+
+    /// Decode a deterministic CBOR page, ignoring unknown response fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed CBOR or invalid required fields.
+    pub fn from_cbor(input: &[u8]) -> Result<Self, SyncCodecError> {
+        let mut fields = decode_map(input)?;
+        let changes = match fields.remove("changes") {
+            Some(Value::Array(values)) => {
+                values.into_iter().map(SyncChange::from_value).collect::<Result<Vec<_>, _>>()?
+            }
+            _ => return Err(invalid("changes must be an array")),
+        };
+        let response = Self {
+            changes,
+            next_cursor: take_uint(&mut fields, "next_cursor")?,
+            more: take_bool(&mut fields, "more")?,
+        };
+        response.validate()?;
+        Ok(response)
+    }
+}
+
 fn invalid(message: impl Into<String>) -> SyncCodecError {
     SyncCodecError::Invalid(message.into())
+}
+
+fn canonical_decimal(value: &str, key: &str) -> Result<u64, SyncCodecError> {
+    if value.is_empty()
+        || (value.len() > 1 && value.starts_with('0'))
+        || !value.bytes().all(|b| b.is_ascii_digit())
+    {
+        return Err(invalid(format!("{key} must be canonical decimal")));
+    }
+    value.parse().map_err(|_| invalid(format!("{key} is out of range")))
 }
 
 fn nonempty(value: &str, key: &str) -> Result<(), SyncCodecError> {
@@ -326,6 +555,56 @@ fn expect_map(value: Value) -> Result<BTreeMap<String, Value>, SyncCodecError> {
     Ok(fields)
 }
 
+fn expect_integer_map(value: Value) -> Result<BTreeMap<u64, Value>, SyncCodecError> {
+    let Value::Map(entries) = value else {
+        return Err(invalid("change must be a map"));
+    };
+    let mut fields = BTreeMap::new();
+    for (key, value) in entries {
+        let Value::UInt(key) = key else {
+            return Err(invalid("change map keys must be unsigned integers"));
+        };
+        fields.insert(key, value);
+    }
+    Ok(fields)
+}
+
+fn take_integer(fields: &mut BTreeMap<u64, Value>, key: u64) -> Result<Value, SyncCodecError> {
+    fields.remove(&key).ok_or_else(|| invalid(format!("missing change field {key}")))
+}
+
+fn decode_uint(value: &Value, key: &str) -> Result<u64, SyncCodecError> {
+    match value {
+        Value::UInt(value) => Ok(*value),
+        _ => Err(invalid(format!("{key} must be an unsigned integer"))),
+    }
+}
+
+fn decode_bytes(value: Value, key: &str) -> Result<Vec<u8>, SyncCodecError> {
+    match value {
+        Value::Bytes(value) => Ok(value),
+        _ => Err(invalid(format!("{key} must be a byte string"))),
+    }
+}
+
+fn decode_bool(value: &Value, key: &str) -> Result<bool, SyncCodecError> {
+    match value {
+        Value::Bool(value) => Ok(*value),
+        _ => Err(invalid(format!("{key} must be a boolean"))),
+    }
+}
+
+fn decode_uuid(value: Value, key: &str) -> Result<Uuid, SyncCodecError> {
+    let Value::Bytes(bytes) = value else {
+        return Err(invalid(format!("{key} must be a 16-byte UUID")));
+    };
+    let bytes: [u8; 16] =
+        bytes.try_into().map_err(|_| invalid(format!("{key} must be a 16-byte UUID")))?;
+    let id = Uuid::from_bytes(bytes);
+    valid_uuid(id, key)?;
+    Ok(id)
+}
+
 fn take_text(fields: &mut BTreeMap<String, Value>, key: &str) -> Result<String, SyncCodecError> {
     match fields.remove(key) {
         Some(Value::Text(value)) => Ok(value),
@@ -348,12 +627,5 @@ fn take_bool(fields: &mut BTreeMap<String, Value>, key: &str) -> Result<bool, Sy
 }
 
 fn take_uuid(fields: &mut BTreeMap<String, Value>, key: &str) -> Result<Uuid, SyncCodecError> {
-    let Some(Value::Bytes(bytes)) = fields.remove(key) else {
-        return Err(invalid(format!("{key} must be a 16-byte UUID")));
-    };
-    let bytes: [u8; 16] =
-        bytes.try_into().map_err(|_| invalid(format!("{key} must be a 16-byte UUID")))?;
-    let id = Uuid::from_bytes(bytes);
-    valid_uuid(id, key)?;
-    Ok(id)
+    decode_uuid(fields.remove(key).ok_or_else(|| invalid(format!("missing {key}")))?, key)
 }
