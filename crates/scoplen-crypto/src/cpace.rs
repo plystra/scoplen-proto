@@ -199,11 +199,10 @@ impl PairingCode {
     /// Returns [`PairingError::Randomness`] when the operating system cannot
     /// provide fresh random bytes.
     pub fn generate() -> Result<Self, PairingError> {
-        let mut random = [0u8; 8];
-        random_bytes(&mut random)?;
         let mut code = [0u8; 8];
-        for (out, value) in code.iter_mut().zip(random) {
-            *out = CODE_ALPHABET[usize::from(value & 0x1f)];
+        random_bytes(&mut code)?;
+        for byte in &mut code {
+            *byte = CODE_ALPHABET[usize::from(*byte & 0x1f)];
         }
         Ok(Self(SecretBytes::new(code)))
     }
