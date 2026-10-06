@@ -34,6 +34,7 @@ recovery display and safety-number outputs are written as text.
 | `crypto.safety-number` | two Ed25519 public keys | twelve decimal digits |
 | `crypto.local-db-key` | UTF-8 passphrase, database key, Argon2 memory KiB, time cost, parallelism, salt, nonce | encoded Argon2id wrapper |
 | `crypto.escrow-account-open`, `crypto.escrow-device-open` | recipient private key, encapsulated key, ciphertext | serialized authenticated Shamir share |
+| `crypto.qr-pairing` | pairing UUIDv7, P-256 KEM public key, P-256 signing public key | canonical `splpair1:` QR text |
 
 The HPKE seal operations use fresh randomness, so their published known answers exercise opening
 fixed ciphertexts. The test suite separately exercises sealing and tamper rejection. The local

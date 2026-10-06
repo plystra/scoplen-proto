@@ -21,3 +21,5 @@ All notable changes to `scoplen-proto` will be recorded here.
   CBOR codecs, including malformed-input tests and a published CBOR vector.
 - Added deterministic K-4 sync session request and response codecs, validation of limits and vault
   identifiers, forward-compatible vault kinds, and published session vectors.
+- Added the K-3 QR pairing payload, strict parser, and constant-time verification of relayed
+  device keys against a published known-answer vector.
