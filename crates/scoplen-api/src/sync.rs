@@ -10,6 +10,13 @@ use scoplen_model::{
 use thiserror::Error;
 use uuid::Uuid;
 
+/// Maximum number of writes accepted in one atomic batch.
+pub const MAX_SYNC_BATCH_OBJECTS: usize = 500;
+/// Maximum encoded size of one write request body.
+pub const MAX_SYNC_BATCH_BYTES: usize = 4 * 1024 * 1024;
+/// Maximum number of retained historical versions in addition to the current version.
+pub const MAX_SYNC_RETAINED_VERSIONS: usize = 20;
+
 /// Errors at the K-4 sync wire boundary.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum SyncCodecError {
@@ -503,6 +510,513 @@ impl SyncChangesResponse {
     }
 }
 
+/// One compare-and-swap object write in a K-4 batch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncWrite {
+    /// Object identifier being created or replaced.
+    pub object_id: Uuid,
+    /// Sequence from which the client merged, or `None` for a new object.
+    pub base_seq: Option<u64>,
+    /// Opaque encrypted envelope.
+    pub payload: Vec<u8>,
+    /// Whether this write records a tombstone.
+    pub tombstone: bool,
+}
+
+impl SyncWrite {
+    /// Validate the write independently of the vault's current state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the object id is not `UUIDv7`.
+    pub fn validate(&self) -> Result<(), SyncCodecError> {
+        valid_uuid(self.object_id, "write object id")
+    }
+
+    fn into_value(self) -> Value {
+        Value::Map(vec![
+            (Value::UInt(1), Value::Bytes(self.object_id.as_bytes().to_vec())),
+            (Value::UInt(2), self.base_seq.map_or(Value::Null, Value::UInt)),
+            (Value::UInt(3), Value::Bytes(self.payload)),
+            (Value::UInt(4), Value::Bool(self.tombstone)),
+        ])
+    }
+
+    fn from_value(value: Value) -> Result<Self, SyncCodecError> {
+        let mut fields = expect_integer_map_with(value, "write")?;
+        reject_unknown_integer_fields(&fields, &[1, 2, 3, 4], "write")?;
+        let base_seq = match take_integer(&mut fields, 2)? {
+            Value::Null => None,
+            Value::UInt(value) => Some(value),
+            _ => return Err(invalid("write base must be an unsigned integer or null")),
+        };
+        let write = Self {
+            object_id: decode_uuid(take_integer(&mut fields, 1)?, "write object id")?,
+            base_seq,
+            payload: decode_bytes(take_integer(&mut fields, 3)?, "write payload")?,
+            tombstone: decode_bool(&take_integer(&mut fields, 4)?, "write tombstone")?,
+        };
+        write.validate()?;
+        Ok(write)
+    }
+}
+
+/// Request body for `POST /sync/v1/vaults/{vault}/objects`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncWriteBatch {
+    /// Writes are applied atomically and retain their input order on the wire.
+    pub writes: Vec<SyncWrite>,
+}
+
+impl SyncWriteBatch {
+    /// Validate write count, object uniqueness, and each write's shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty or oversized batch, duplicate ids, or an invalid write.
+    pub fn validate(&self) -> Result<(), SyncCodecError> {
+        if self.writes.is_empty() {
+            return Err(invalid("write batch must not be empty"));
+        }
+        if self.writes.len() > MAX_SYNC_BATCH_OBJECTS {
+            return Err(invalid("write batch exceeds 500 objects"));
+        }
+        let mut ids = BTreeSet::new();
+        for write in &self.writes {
+            write.validate()?;
+            if !ids.insert(write.object_id) {
+                return Err(invalid("duplicate write object id"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Encode the batch as a direct deterministic CBOR array.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or the encoded body exceeds 4 MiB.
+    pub fn to_cbor(&self) -> Result<Vec<u8>, SyncCodecError> {
+        self.validate()?;
+        let encoded = cbor::encode(&Value::Array(
+            self.writes.iter().cloned().map(SyncWrite::into_value).collect(),
+        ))?;
+        if encoded.len() > MAX_SYNC_BATCH_BYTES {
+            return Err(invalid("write batch exceeds 4 MiB"));
+        }
+        Ok(encoded)
+    }
+
+    /// Decode a direct deterministic CBOR write array.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed or non-canonical CBOR, invalid entries, or batch limits.
+    pub fn from_cbor(input: &[u8]) -> Result<Self, SyncCodecError> {
+        if input.len() > MAX_SYNC_BATCH_BYTES {
+            return Err(invalid("write batch exceeds 4 MiB"));
+        }
+        let Value::Array(values) = cbor::decode(input)? else {
+            return Err(invalid("write batch must be an array"));
+        };
+        if values.len() > MAX_SYNC_BATCH_OBJECTS {
+            return Err(invalid("write batch exceeds 500 objects"));
+        }
+        let batch = Self {
+            writes: values.into_iter().map(SyncWrite::from_value).collect::<Result<Vec<_>, _>>()?,
+        };
+        batch.validate()?;
+        Ok(batch)
+    }
+}
+
+/// A sequence assignment returned for one accepted write.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncWriteAssignment {
+    pub object_id: Uuid,
+    pub seq: u64,
+}
+
+impl SyncWriteAssignment {
+    fn validate(&self) -> Result<(), SyncCodecError> {
+        valid_uuid(self.object_id, "assignment object id")?;
+        positive(self.seq, "assignment sequence")
+    }
+
+    fn into_value(self) -> Value {
+        Value::Map(vec![
+            (Value::UInt(1), Value::Bytes(self.object_id.as_bytes().to_vec())),
+            (Value::UInt(2), Value::UInt(self.seq)),
+        ])
+    }
+
+    fn from_value(value: Value) -> Result<Self, SyncCodecError> {
+        let mut fields = expect_integer_map_with(value, "assignment")?;
+        reject_unknown_integer_fields(&fields, &[1, 2], "assignment")?;
+        let assignment = Self {
+            object_id: decode_uuid(take_integer(&mut fields, 1)?, "assignment object id")?,
+            seq: decode_uint(&take_integer(&mut fields, 2)?, "assignment sequence")?,
+        };
+        assignment.validate()?;
+        Ok(assignment)
+    }
+}
+
+/// Successful response body for an atomic write batch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncWriteBatchResponse {
+    /// Assignments correspond to the request writes in input order.
+    pub assignments: Vec<SyncWriteAssignment>,
+}
+
+impl SyncWriteBatchResponse {
+    /// Validate assignment count, object uniqueness, and sequence ordering.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty or oversized response, duplicate ids, invalid UUIDs, or
+    /// non-increasing sequence numbers.
+    pub fn validate(&self) -> Result<(), SyncCodecError> {
+        if self.assignments.is_empty() {
+            return Err(invalid("write response must not be empty"));
+        }
+        if self.assignments.len() > MAX_SYNC_BATCH_OBJECTS {
+            return Err(invalid("write response exceeds 500 assignments"));
+        }
+        let mut ids = BTreeSet::new();
+        let mut previous_seq = 0;
+        for assignment in &self.assignments {
+            assignment.validate()?;
+            if !ids.insert(assignment.object_id) {
+                return Err(invalid("duplicate assignment object id"));
+            }
+            if assignment.seq <= previous_seq {
+                return Err(invalid("assignments must have strictly increasing sequences"));
+            }
+            previous_seq = assignment.seq;
+        }
+        Ok(())
+    }
+
+    /// Validate that assignments correspond to a request in input order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when either value is invalid or the assignment count/order differs.
+    pub fn validate_for_batch(&self, batch: &SyncWriteBatch) -> Result<(), SyncCodecError> {
+        batch.validate()?;
+        self.validate()?;
+        if self.assignments.len() != batch.writes.len() {
+            return Err(invalid("assignment count does not match write batch"));
+        }
+        for (assignment, write) in self.assignments.iter().zip(&batch.writes) {
+            if assignment.object_id != write.object_id {
+                return Err(invalid("assignment order does not match write batch"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Encode the assignments as a direct deterministic CBOR array.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the response is invalid or cannot be encoded.
+    pub fn to_cbor(&self) -> Result<Vec<u8>, SyncCodecError> {
+        self.validate()?;
+        cbor::encode(&Value::Array(
+            self.assignments.iter().cloned().map(SyncWriteAssignment::into_value).collect(),
+        ))
+        .map_err(Into::into)
+    }
+
+    /// Decode a direct deterministic CBOR assignment array.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed or non-canonical CBOR, invalid entries, or response limits.
+    pub fn from_cbor(input: &[u8]) -> Result<Self, SyncCodecError> {
+        let Value::Array(values) = cbor::decode(input)? else {
+            return Err(invalid("write response must be an array"));
+        };
+        if values.len() > MAX_SYNC_BATCH_OBJECTS {
+            return Err(invalid("write response exceeds 500 assignments"));
+        }
+        let response = Self {
+            assignments: values
+                .into_iter()
+                .map(SyncWriteAssignment::from_value)
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+        response.validate()?;
+        Ok(response)
+    }
+}
+
+/// Alias matching the endpoint's request terminology.
+pub type SyncWriteRequest = SyncWriteBatch;
+/// Alias matching the endpoint's response terminology.
+pub type SyncWriteResponse = SyncWriteBatchResponse;
+
+/// A device cursor acknowledgement request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SyncAckRequest {
+    pub cursor: u64,
+}
+
+impl SyncAckRequest {
+    /// Encode the acknowledgement as `{cursor}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if deterministic CBOR encoding fails.
+    pub fn to_cbor(self) -> Result<Vec<u8>, SyncCodecError> {
+        encode_map(vec![("cursor", Value::UInt(self.cursor))])
+    }
+
+    /// Decode a strict acknowledgement request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed CBOR, a missing cursor, or an unknown field.
+    pub fn from_cbor(input: &[u8]) -> Result<Self, SyncCodecError> {
+        let mut fields = decode_map(input)?;
+        let request = Self { cursor: take_uint(&mut fields, "cursor")? };
+        if !fields.is_empty() {
+            return Err(invalid("unknown acknowledgement request field"));
+        }
+        Ok(request)
+    }
+}
+
+/// The stored maximum cursor returned by an acknowledgement endpoint.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SyncAckResponse {
+    pub cursor: u64,
+}
+
+impl SyncAckResponse {
+    /// Encode the acknowledgement response as `{cursor}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if deterministic CBOR encoding fails.
+    pub fn to_cbor(self) -> Result<Vec<u8>, SyncCodecError> {
+        encode_map(vec![("cursor", Value::UInt(self.cursor))])
+    }
+
+    /// Decode an acknowledgement response, ignoring additive response fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed CBOR, a missing cursor, or a wrong cursor type.
+    pub fn from_cbor(input: &[u8]) -> Result<Self, SyncCodecError> {
+        let mut fields = decode_map(input)?;
+        Ok(Self { cursor: take_uint(&mut fields, "cursor")? })
+    }
+}
+
+/// Alias for callers that use the short endpoint name.
+pub type SyncAck = SyncAckRequest;
+
+/// A full-reconciliation page returned by `GET /sync/v1/vaults/{vault}/snapshot`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncSnapshotResponse {
+    pub objects: Vec<SyncChange>,
+    pub next_cursor: u64,
+    pub more: bool,
+}
+
+impl SyncSnapshotResponse {
+    /// Validate object ordering, uniqueness, and cursor invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid entries, ordering, duplicates, or cursor rules.
+    pub fn validate(&self) -> Result<(), SyncCodecError> {
+        validate_page(&self.objects, self.next_cursor, self.more, "snapshot objects")
+    }
+
+    /// Validate a snapshot page against its canonical query parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the query or page violates the pagination contract.
+    pub fn validate_for_query(&self, query: &SyncChangesQuery) -> Result<(), SyncCodecError> {
+        query.validate()?;
+        self.validate()?;
+        if self.objects.len() > usize::from(query.limit) {
+            return Err(invalid("snapshot exceeds requested limit"));
+        }
+        if self.next_cursor < query.after
+            || self.objects.first().is_some_and(|object| object.seq <= query.after)
+        {
+            return Err(invalid("snapshot precedes after cursor"));
+        }
+        Ok(())
+    }
+
+    /// Encode the snapshot page as `{objects, next_cursor, more}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or deterministic CBOR encoding fails.
+    pub fn to_cbor(&self) -> Result<Vec<u8>, SyncCodecError> {
+        self.validate()?;
+        encode_map(vec![
+            (
+                "objects",
+                Value::Array(self.objects.iter().cloned().map(SyncChange::into_value).collect()),
+            ),
+            ("next_cursor", Value::UInt(self.next_cursor)),
+            ("more", Value::Bool(self.more)),
+        ])
+    }
+
+    /// Decode a snapshot page, ignoring additive response fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed CBOR, missing fields, invalid entries, or cursor rules.
+    pub fn from_cbor(input: &[u8]) -> Result<Self, SyncCodecError> {
+        let mut fields = decode_map(input)?;
+        let objects = match fields.remove("objects") {
+            Some(Value::Array(values)) => {
+                values.into_iter().map(SyncChange::from_value).collect::<Result<Vec<_>, _>>()?
+            }
+            _ => return Err(invalid("objects must be an array")),
+        };
+        let response = Self {
+            objects,
+            next_cursor: take_uint(&mut fields, "next_cursor")?,
+            more: take_bool(&mut fields, "more")?,
+        };
+        response.validate()?;
+        Ok(response)
+    }
+}
+
+/// A bounded current-and-history response for one object.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncVersionsResponse {
+    pub versions: Vec<SyncChange>,
+}
+
+impl SyncVersionsResponse {
+    /// Validate the bounded ascending version list.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty, oversized, mixed-object, or non-ascending history.
+    pub fn validate(&self) -> Result<(), SyncCodecError> {
+        if self.versions.is_empty() {
+            return Err(invalid("versions must not be empty"));
+        }
+        if self.versions.len() > MAX_SYNC_RETAINED_VERSIONS + 1 {
+            return Err(invalid("versions exceeds current plus 20 retained entries"));
+        }
+        let object_id = self.versions[0].object_id;
+        let mut previous_seq = 0;
+        for version in &self.versions {
+            version.validate()?;
+            if version.object_id != object_id {
+                return Err(invalid("versions must contain one object id"));
+            }
+            if version.seq <= previous_seq {
+                return Err(invalid("versions must have strictly increasing sequences"));
+            }
+            previous_seq = version.seq;
+        }
+        Ok(())
+    }
+
+    /// Validate that every history entry belongs to the path object.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the path id is invalid or an entry has a different object id.
+    pub fn validate_for_object(&self, object_id: Uuid) -> Result<(), SyncCodecError> {
+        valid_uuid(object_id, "version object id")?;
+        self.validate()?;
+        if self.versions.iter().any(|version| version.object_id != object_id) {
+            return Err(invalid("version object id does not match path"));
+        }
+        Ok(())
+    }
+
+    /// Encode the history as `{versions}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or deterministic CBOR encoding fails.
+    pub fn to_cbor(&self) -> Result<Vec<u8>, SyncCodecError> {
+        self.validate()?;
+        encode_map(vec![(
+            "versions",
+            Value::Array(self.versions.iter().cloned().map(SyncChange::into_value).collect()),
+        )])
+    }
+
+    /// Decode a history response, ignoring additive response fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed CBOR, missing fields, invalid entries, or history limits.
+    pub fn from_cbor(input: &[u8]) -> Result<Self, SyncCodecError> {
+        let mut fields = decode_map(input)?;
+        let versions = match fields.remove("versions") {
+            Some(Value::Array(values)) => {
+                values.into_iter().map(SyncChange::from_value).collect::<Result<Vec<_>, _>>()?
+            }
+            _ => return Err(invalid("versions must be an array")),
+        };
+        let response = Self { versions };
+        response.validate()?;
+        Ok(response)
+    }
+
+    /// Decode and validate a history response against its path object id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when decoding fails or an entry does not match the path id.
+    pub fn from_cbor_for_object(input: &[u8], object_id: Uuid) -> Result<Self, SyncCodecError> {
+        let response = Self::from_cbor(input)?;
+        response.validate_for_object(object_id)?;
+        Ok(response)
+    }
+}
+
+fn validate_page(
+    entries: &[SyncChange],
+    next_cursor: u64,
+    more: bool,
+    label: &str,
+) -> Result<(), SyncCodecError> {
+    if entries.len() > 1_000 {
+        return Err(invalid(format!("{label} exceeds 1000 entries")));
+    }
+    let mut ids = BTreeSet::new();
+    let mut previous_seq = 0;
+    for entry in entries {
+        entry.validate()?;
+        if entry.seq <= previous_seq {
+            return Err(invalid(format!("{label} must have strictly increasing sequence numbers")));
+        }
+        if !ids.insert(entry.object_id) {
+            return Err(invalid(format!("duplicate {label} object id")));
+        }
+        previous_seq = entry.seq;
+    }
+    if next_cursor < previous_seq {
+        return Err(invalid(format!("{label} cursor precedes a returned entry")));
+    }
+    if more && (entries.is_empty() || next_cursor != previous_seq) {
+        return Err(invalid(format!("non-final {label} cursor must equal its last entry")));
+    }
+    Ok(())
+}
+
 fn invalid(message: impl Into<String>) -> SyncCodecError {
     SyncCodecError::Invalid(message.into())
 }
@@ -556,17 +1070,35 @@ fn expect_map(value: Value) -> Result<BTreeMap<String, Value>, SyncCodecError> {
 }
 
 fn expect_integer_map(value: Value) -> Result<BTreeMap<u64, Value>, SyncCodecError> {
+    expect_integer_map_with(value, "change")
+}
+
+fn expect_integer_map_with(
+    value: Value,
+    label: &str,
+) -> Result<BTreeMap<u64, Value>, SyncCodecError> {
     let Value::Map(entries) = value else {
-        return Err(invalid("change must be a map"));
+        return Err(invalid(format!("{label} must be a map")));
     };
     let mut fields = BTreeMap::new();
     for (key, value) in entries {
         let Value::UInt(key) = key else {
-            return Err(invalid("change map keys must be unsigned integers"));
+            return Err(invalid(format!("{label} map keys must be unsigned integers")));
         };
         fields.insert(key, value);
     }
     Ok(fields)
+}
+
+fn reject_unknown_integer_fields(
+    fields: &BTreeMap<u64, Value>,
+    allowed: &[u64],
+    label: &str,
+) -> Result<(), SyncCodecError> {
+    if fields.keys().any(|key| !allowed.contains(key)) {
+        return Err(invalid(format!("unknown {label} field")));
+    }
+    Ok(())
 }
 
 fn take_integer(fields: &mut BTreeMap<u64, Value>, key: u64) -> Result<Value, SyncCodecError> {

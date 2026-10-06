@@ -1,0 +1,42 @@
+{
+  "format": "scoplen-test-vectors",
+  "version": 1,
+  "vectors": [
+    {
+      "id": "sync-writes-request-v1",
+      "kind": "sync.writes.request",
+      "input": "[{\"object_id\":\"00000000-0000-7000-8000-000000000001\",\"base_seq\":null,\"payload\":\"dead\",\"tombstone\":false},{\"object_id\":\"00000000-0000-7000-8000-000000000002\",\"base_seq\":3,\"payload\":\"dead\",\"tombstone\":true}]",
+      "expected": "82a401500000000000007000800000000000000102f60342dead04f4a401500000000000007000800000000000000202030342dead04f5"
+    },
+    {
+      "id": "sync-writes-response-v1",
+      "kind": "sync.writes.response",
+      "input": "[{\"object_id\":\"00000000-0000-7000-8000-000000000001\",\"seq\":4},{\"object_id\":\"00000000-0000-7000-8000-000000000002\",\"seq\":5}]",
+      "expected": "82a20150000000000000700080000000000000010204a20150000000000000700080000000000000020205"
+    },
+    {
+      "id": "sync-ack-request-v1",
+      "kind": "sync.ack.request",
+      "input": "{\"cursor\":7}",
+      "expected": "a166637572736f7207"
+    },
+    {
+      "id": "sync-ack-response-v1",
+      "kind": "sync.ack.response",
+      "input": "{\"cursor\":7}",
+      "expected": "a166637572736f7207"
+    },
+    {
+      "id": "sync-snapshot-response-v1",
+      "kind": "sync.snapshot.response",
+      "input": "{\"objects\":[{\"object_id\":\"00000000-0000-7000-8000-000000000001\",\"seq\":2,\"payload\":\"01be\",\"tombstone\":false,\"signer_device_id\":\"00000000-0000-7000-8000-00000000000b\"},{\"object_id\":\"00000000-0000-7000-8000-000000000002\",\"seq\":5,\"payload\":\"02be\",\"tombstone\":true,\"signer_device_id\":\"00000000-0000-7000-8000-00000000000c\"}],\"next_cursor\":5,\"more\":true}",
+      "expected": "a3646d6f7265f5676f626a6563747382a50150000000000000700080000000000000010202034201be04f405500000000000007000800000000000000ba50150000000000000700080000000000000020205034202be04f505500000000000007000800000000000000c6b6e6578745f637572736f7205"
+    },
+    {
+      "id": "sync-versions-response-v1",
+      "kind": "sync.versions.response",
+      "input": "{\"versions\":[{\"object_id\":\"00000000-0000-7000-8000-000000000001\",\"seq\":2,\"payload\":\"01be\",\"tombstone\":false,\"signer_device_id\":\"00000000-0000-7000-8000-00000000000b\"},{\"object_id\":\"00000000-0000-7000-8000-000000000001\",\"seq\":5,\"payload\":\"01be\",\"tombstone\":false,\"signer_device_id\":\"00000000-0000-7000-8000-00000000000b\"}]}",
+      "expected": "a16876657273696f6e7382a50150000000000000700080000000000000010202034201be04f405500000000000007000800000000000000ba50150000000000000700080000000000000010205034201be04f405500000000000007000800000000000000b"
+    }
+  ]
+}
