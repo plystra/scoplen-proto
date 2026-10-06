@@ -7,6 +7,7 @@
 
 mod certificate;
 mod envelope;
+mod escrow;
 mod hpke;
 mod keys;
 mod primitives;
@@ -17,6 +18,10 @@ mod signature;
 
 pub use certificate::{DeviceCertificate, RevocationStatement, verify_device_list};
 pub use envelope::ObjectEnvelope;
+pub use escrow::{
+    open_escrow_share_from_account, open_escrow_share_from_device, rewrap_escrow_share_to_device,
+    wrap_escrow_share_to_account,
+};
 pub use hpke::{
     AccountKemKeyPair, DeviceKemKeyPair, HpkeCiphertext, hpke_open_account, hpke_open_device,
     hpke_seal_account, hpke_seal_device,
