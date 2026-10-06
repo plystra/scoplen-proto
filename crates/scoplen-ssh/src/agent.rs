@@ -17,6 +17,9 @@ const SIGN_REQUEST: u8 = 13;
 const SIGN_RESPONSE: u8 = 14;
 const FAILURE: u8 = 5;
 const SUCCESS: u8 = 6;
+const REMOVE_ALL_IDENTITIES: u8 = 19;
+const LOCK: u8 = 22;
+const UNLOCK: u8 = 23;
 
 /// Maximum complete SSH agent payload, excluding the four-byte frame length.
 pub const MAX_AGENT_FRAME: usize = 256 * 1024;
@@ -28,6 +31,8 @@ pub const MAX_AGENT_SIGN_DATA: usize = 256 * 1024;
 pub const MAX_AGENT_COMMENT: usize = 4096;
 /// Maximum number of identities in one agent response.
 pub const MAX_AGENT_IDENTITIES: usize = 1024;
+/// Maximum lock or unlock passphrase length accepted by the agent boundary.
+pub const MAX_AGENT_PASSPHRASE: usize = 4096;
 /// OpenSSH requests an RSA SHA-256 signature when this flag is set.
 pub const AGENT_SIGN_FLAG_RSA_SHA2_256: u32 = 2;
 /// OpenSSH requests an RSA SHA-512 signature when this flag is set.
@@ -106,6 +111,12 @@ pub enum AgentMessage {
     IdentitiesAnswer { identities: Vec<AgentIdentity> },
     /// Return an SSH signature blob.
     SignResponse { signature: Vec<u8> },
+    /// Remove every identity currently held by the agent.
+    RemoveAllIdentities,
+    /// Lock the agent with a passphrase.
+    Lock { passphrase: Vec<u8> },
+    /// Unlock the agent with a passphrase.
+    Unlock { passphrase: Vec<u8> },
     /// Return a generic success response.
     Success,
     /// Return a generic failure response.
@@ -181,6 +192,17 @@ impl AgentMessage {
                 validate_blob(signature, MAX_AGENT_KEY_BLOB, "signature")?;
                 payload.push(SIGN_RESPONSE);
                 append_string(&mut payload, signature, MAX_AGENT_KEY_BLOB, "signature")?;
+            }
+            Self::RemoveAllIdentities => payload.push(REMOVE_ALL_IDENTITIES),
+            Self::Lock { passphrase } => {
+                validate_size(passphrase, MAX_AGENT_PASSPHRASE, "passphrase")?;
+                payload.push(LOCK);
+                append_string(&mut payload, passphrase, MAX_AGENT_PASSPHRASE, "passphrase")?;
+            }
+            Self::Unlock { passphrase } => {
+                validate_size(passphrase, MAX_AGENT_PASSPHRASE, "passphrase")?;
+                payload.push(UNLOCK);
+                append_string(&mut payload, passphrase, MAX_AGENT_PASSPHRASE, "passphrase")?;
             }
             Self::Success => payload.push(SUCCESS),
             Self::Failure => payload.push(FAILURE),
@@ -304,6 +326,23 @@ impl<C: AgentChannel> AgentClient<C> {
         }
     }
 
+    /// Remove every identity currently held by the agent.
+    pub fn remove_all_identities(&mut self) -> Result<(), AgentError> {
+        self.expect_success(&AgentMessage::RemoveAllIdentities)
+    }
+
+    /// Lock the agent with a bounded passphrase.
+    pub fn lock(&mut self, passphrase: &[u8]) -> Result<(), AgentError> {
+        validate_size(passphrase, MAX_AGENT_PASSPHRASE, "passphrase")?;
+        self.expect_success(&AgentMessage::Lock { passphrase: passphrase.to_vec() })
+    }
+
+    /// Unlock the agent with a bounded passphrase.
+    pub fn unlock(&mut self, passphrase: &[u8]) -> Result<(), AgentError> {
+        validate_size(passphrase, MAX_AGENT_PASSPHRASE, "passphrase")?;
+        self.expect_success(&AgentMessage::Unlock { passphrase: passphrase.to_vec() })
+    }
+
     /// Return the platform channel after the client has finished using it.
     #[must_use]
     pub fn into_inner(self) -> C {
@@ -315,6 +354,14 @@ impl<C: AgentChannel> AgentClient<C> {
         let response = self.channel.exchange(&frame)?;
         AgentMessage::decode_frame(&response)
     }
+
+    fn expect_success(&mut self, request: &AgentMessage) -> Result<(), AgentError> {
+        match self.exchange(request)? {
+            AgentMessage::Success => Ok(()),
+            AgentMessage::Failure => Err(AgentError::AgentFailure),
+            _ => Err(AgentError::UnexpectedResponse),
+        }
+    }
 }
 
 /// Key store operations needed by the agent server boundary.
@@ -324,6 +371,21 @@ pub trait AgentKeyStore {
 
     /// Sign data for a key that exactly matches one stored identity.
     fn sign(&self, key_blob: &[u8], data: &[u8], flags: u32) -> Result<Vec<u8>, AgentError>;
+
+    /// Remove every identity currently held by the store.
+    fn remove_all_identities(&self) -> Result<(), AgentError> {
+        Err(AgentError::AgentFailure)
+    }
+
+    /// Lock the store with a passphrase.
+    fn lock(&self, _passphrase: &[u8]) -> Result<(), AgentError> {
+        Err(AgentError::AgentFailure)
+    }
+
+    /// Unlock the store with a passphrase.
+    fn unlock(&self, _passphrase: &[u8]) -> Result<(), AgentError> {
+        Err(AgentError::AgentFailure)
+    }
 }
 
 /// Server-side dispatch for forwarded or locally exposed agent requests.
@@ -351,6 +413,18 @@ impl<S: AgentKeyStore> AgentServer<S> {
                     Err(_) => AgentMessage::Failure,
                 }
             }
+            AgentMessage::RemoveAllIdentities => match self.store.remove_all_identities() {
+                Ok(()) => AgentMessage::Success,
+                Err(_) => AgentMessage::Failure,
+            },
+            AgentMessage::Lock { passphrase } => match self.store.lock(&passphrase) {
+                Ok(()) => AgentMessage::Success,
+                Err(_) => AgentMessage::Failure,
+            },
+            AgentMessage::Unlock { passphrase } => match self.store.unlock(&passphrase) {
+                Ok(()) => AgentMessage::Success,
+                Err(_) => AgentMessage::Failure,
+            },
             _ => AgentMessage::Failure,
         }
     }
@@ -417,6 +491,22 @@ fn decode_payload(payload: &[u8]) -> Result<AgentMessage, AgentError> {
             }
             validate_blob(signature, MAX_AGENT_KEY_BLOB, "signature")?;
             Ok(AgentMessage::SignResponse { signature: signature.to_vec() })
+        }
+        REMOVE_ALL_IDENTITIES if rest.is_empty() => Ok(AgentMessage::RemoveAllIdentities),
+        REMOVE_ALL_IDENTITIES => Err(AgentError::MalformedFrame("remove all identities payload")),
+        LOCK => {
+            let (passphrase, trailing) = read_string(rest, MAX_AGENT_PASSPHRASE, "passphrase")?;
+            if !trailing.is_empty() {
+                return Err(AgentError::MalformedFrame("lock payload"));
+            }
+            Ok(AgentMessage::Lock { passphrase: passphrase.to_vec() })
+        }
+        UNLOCK => {
+            let (passphrase, trailing) = read_string(rest, MAX_AGENT_PASSPHRASE, "passphrase")?;
+            if !trailing.is_empty() {
+                return Err(AgentError::MalformedFrame("unlock payload"));
+            }
+            Ok(AgentMessage::Unlock { passphrase: passphrase.to_vec() })
         }
         SUCCESS if rest.is_empty() => Ok(AgentMessage::Success),
         SUCCESS => Err(AgentError::MalformedFrame("success payload")),
@@ -496,6 +586,18 @@ mod tests {
                 return Err(AgentError::AgentFailure);
             }
             Ok(self.signature.clone())
+        }
+
+        fn remove_all_identities(&self) -> Result<(), AgentError> {
+            Ok(())
+        }
+
+        fn lock(&self, _passphrase: &[u8]) -> Result<(), AgentError> {
+            Ok(())
+        }
+
+        fn unlock(&self, _passphrase: &[u8]) -> Result<(), AgentError> {
+            Ok(())
         }
     }
 
@@ -595,6 +697,9 @@ mod tests {
                 identities: vec![AgentIdentity::new(KEY, b"work key").expect("identity")],
             },
             AgentMessage::SignResponse { signature: b"signature".to_vec() },
+            AgentMessage::RemoveAllIdentities,
+            AgentMessage::Lock { passphrase: b"secret".to_vec() },
+            AgentMessage::Unlock { passphrase: b"secret".to_vec() },
             AgentMessage::Success,
             AgentMessage::Failure,
         ];
@@ -616,6 +721,9 @@ mod tests {
             client.sign(KEY, b"payload", AGENT_SIGN_FLAG_RSA_SHA2_512).expect("signature"),
             b"signed payload"
         );
+        client.remove_all_identities().expect("remove all");
+        client.lock(b"secret").expect("lock");
+        client.unlock(b"secret").expect("unlock");
     }
 
     #[test]
@@ -673,6 +781,20 @@ mod tests {
             }
             .encode_frame(),
             Err(AgentError::FieldTooLarge("sign data"))
+        );
+        assert_eq!(
+            AgentMessage::Lock { passphrase: vec![0; MAX_AGENT_PASSPHRASE + 1] }.encode_frame(),
+            Err(AgentError::FieldTooLarge("passphrase"))
+        );
+        let mut client = AgentClient::new(Loopback {
+            server: AgentServer::new(Store {
+                identity: AgentIdentity::new(KEY, b"work key").expect("identity"),
+                signature: b"signed payload".to_vec(),
+            }),
+        });
+        assert_eq!(
+            client.lock(&vec![0; MAX_AGENT_PASSPHRASE + 1]),
+            Err(AgentError::FieldTooLarge("passphrase"))
         );
     }
 }

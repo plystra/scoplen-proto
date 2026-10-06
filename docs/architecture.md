@@ -32,5 +32,6 @@ The agent boundary provides bounded request-identities and sign request/response
 transport-neutral client calls, and server dispatch that maps key-store errors to the opaque SSH
 agent failure response. `FramedAgentChannel` applies bounded read/write framing over a blocking
 stream, with platform constructors for Unix-domain sockets and Windows named pipes. Pageant
-compatibility, agent forwarding, the concrete SSH transport, remaining authentication methods,
-channels, SFTP, and interoperability work remain open.
+compatibility and agent forwarding remain open; bounded remove-all, lock, and unlock requests are
+also dispatched with opaque failure mapping. The concrete SSH transport, remaining authentication
+methods, channels, SFTP, and interoperability work remain open.

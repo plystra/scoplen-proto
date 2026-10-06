@@ -34,6 +34,8 @@ All notable changes to `scoplen-proto` will be recorded here.
 - Added the bounded blocking agent stream channel with fragmented-read handling and platform
   constructors for Unix-domain sockets and Windows named pipes, including pre-write request
   validation and oversized-response tests. Pageant compatibility and forwarding remain open.
+- Added bounded agent management requests for removing all identities and locking or unlocking
+  an agent, with opaque failure mapping and passphrase limits.
 - Added the stable HTTP error-code registry and RFC 9457 problem details with JSON and deterministic
   CBOR codecs, including malformed-input tests and a published CBOR vector.
 - Extended the stable error-code registry for authenticated sync HTTP adapters with
