@@ -1,0 +1,12 @@
+{
+  "format": "scoplen-test-vectors",
+  "version": 1,
+  "vectors": [
+    {
+      "id": "api-problem-sync-conflict-cbor",
+      "kind": "api.problem.cbor",
+      "input": "{\"type\":\"about:blank\",\"title\":\"Conflict\",\"status\":409,\"detail\":\"Retry.\",\"instance\":\"r1\",\"code\":\"sync.conflict\",\"changed\":false,\"retryable\":true}",
+      "expected": "a864636f64656d73796e632e636f6e666c69637464747970656b61626f75743a626c616e6b657469746c6568436f6e666c6963746664657461696c6652657472792e66737461747573190199676368616e676564f468696e7374616e636562723169726574727961626c65f5"
+    }
+  ]
+}

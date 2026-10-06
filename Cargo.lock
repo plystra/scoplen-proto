@@ -728,6 +728,8 @@ dependencies = [
 name = "scoplen-api"
 version = "0.1.0"
 dependencies = [
+ "scoplen-model",
+ "scoplen-test-vectors",
  "serde",
  "serde_json",
  "thiserror",

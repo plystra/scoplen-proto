@@ -3,8 +3,9 @@
 
 #![forbid(unsafe_code)]
 
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
+use scoplen_model::cbor::{self, Value};
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 
@@ -31,6 +32,9 @@ pub enum ApiContractError {
     /// A problem-details field violates the contract.
     #[error("invalid problem details: {0}")]
     InvalidProblem(String),
+    /// A CBOR body was not deterministic or could not be encoded.
+    #[error("invalid problem CBOR: {0}")]
+    Cbor(#[from] cbor::Error),
 }
 
 /// A stable machine-readable error code.
@@ -101,6 +105,7 @@ fn valid_code_part(value: &str) -> bool {
 
 /// RFC 9457 problem details shared by JSON and CBOR endpoints.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "RawProblemDetails")]
 pub struct ProblemDetails {
     /// URI identifying the problem type; `about:blank` is the default.
     #[serde(rename = "type")]
@@ -119,6 +124,38 @@ pub struct ProblemDetails {
     pub changed: bool,
     /// Whether retrying the same request may succeed.
     pub retryable: bool,
+}
+
+#[derive(Deserialize)]
+struct RawProblemDetails {
+    #[serde(rename = "type")]
+    problem_type: String,
+    title: String,
+    status: u16,
+    detail: String,
+    instance: String,
+    code: ErrorCode,
+    changed: bool,
+    retryable: bool,
+}
+
+impl TryFrom<RawProblemDetails> for ProblemDetails {
+    type Error = ApiContractError;
+
+    fn try_from(raw: RawProblemDetails) -> Result<Self, Self::Error> {
+        let problem = Self {
+            problem_type: raw.problem_type,
+            title: raw.title,
+            status: raw.status,
+            detail: raw.detail,
+            instance: raw.instance,
+            code: raw.code,
+            changed: raw.changed,
+            retryable: raw.retryable,
+        };
+        problem.validate()?;
+        Ok(problem)
+    }
 }
 
 impl ProblemDetails {
@@ -155,8 +192,8 @@ impl ProblemDetails {
     ///
     /// # Errors
     ///
-    /// Returns [`ApiContractError::InvalidProblem`] when required fields are empty, the type is
-    /// not a URI-like value, or the status is not an HTTP status.
+    /// Returns [`ApiContractError::InvalidProblem`] when required fields are empty or the status
+    /// is not an HTTP status.
     pub fn validate(&self) -> Result<(), ApiContractError> {
         if !(100..=599).contains(&self.status) {
             return Err(ApiContractError::InvalidProblem(format!(
@@ -174,6 +211,94 @@ impl ProblemDetails {
             ));
         }
         Ok(())
+    }
+
+    /// Encode the same eight fields as a deterministic CBOR map with text keys.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a required field is invalid or text is not NFC.
+    pub fn to_cbor(&self) -> Result<Vec<u8>, ApiContractError> {
+        self.validate()?;
+        let entries = vec![
+            ("type", Value::Text(self.problem_type.clone())),
+            ("title", Value::Text(self.title.clone())),
+            ("status", Value::UInt(u64::from(self.status))),
+            ("detail", Value::Text(self.detail.clone())),
+            ("instance", Value::Text(self.instance.clone())),
+            ("code", Value::Text(self.code.as_str().to_owned())),
+            ("changed", Value::Bool(self.changed)),
+            ("retryable", Value::Bool(self.retryable)),
+        ];
+        cbor::encode(&Value::Map(
+            entries.into_iter().map(|(key, value)| (Value::Text(key.into()), value)).collect(),
+        ))
+        .map_err(Into::into)
+    }
+
+    /// Decode a deterministic CBOR problem, requiring every standard field and its wire type.
+    ///
+    /// Unknown extension fields are ignored. Known fields with invalid types are rejected.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed CBOR, missing fields, incorrect types, or invalid values.
+    pub fn from_cbor(input: &[u8]) -> Result<Self, ApiContractError> {
+        let Value::Map(entries) = cbor::decode(input)? else {
+            return Err(invalid_problem("top-level value must be a map"));
+        };
+        let mut fields = BTreeMap::new();
+        for (key, value) in entries {
+            let Value::Text(key) = key else {
+                return Err(invalid_problem("map keys must be text"));
+            };
+            fields.insert(key, value);
+        }
+        let problem = Self {
+            problem_type: required_text(&mut fields, "type")?,
+            title: required_text(&mut fields, "title")?,
+            status: required_status(&mut fields)?,
+            detail: required_text(&mut fields, "detail")?,
+            instance: required_text(&mut fields, "instance")?,
+            code: ErrorCode::new(required_text(&mut fields, "code")?)?,
+            changed: required_bool(&mut fields, "changed")?,
+            retryable: required_bool(&mut fields, "retryable")?,
+        };
+        problem.validate()?;
+        Ok(problem)
+    }
+}
+
+fn invalid_problem(message: impl Into<String>) -> ApiContractError {
+    ApiContractError::InvalidProblem(message.into())
+}
+
+fn required_text(
+    fields: &mut BTreeMap<String, Value>,
+    key: &str,
+) -> Result<String, ApiContractError> {
+    match fields.remove(key) {
+        Some(Value::Text(value)) => Ok(value),
+        _ => Err(invalid_problem(format!("{key} must be a text string"))),
+    }
+}
+
+fn required_bool(
+    fields: &mut BTreeMap<String, Value>,
+    key: &str,
+) -> Result<bool, ApiContractError> {
+    match fields.remove(key) {
+        Some(Value::Bool(value)) => Ok(value),
+        _ => Err(invalid_problem(format!("{key} must be a boolean"))),
+    }
+}
+
+fn required_status(fields: &mut BTreeMap<String, Value>) -> Result<u16, ApiContractError> {
+    match fields.remove("status") {
+        Some(Value::UInt(value)) => {
+            u16::try_from(value).map_err(|_| invalid_problem("status is out of range"))
+        }
+        _ => Err(invalid_problem("status must be an unsigned integer")),
     }
 }
 
@@ -198,6 +323,22 @@ mod tests {
         let decoded: ProblemDetails = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(decoded, problem);
         decoded.validate().expect("valid problem");
+        assert!(
+            serde_json::from_str::<ProblemDetails>(
+                &json.replace("\"status\":409", "\"status\":600")
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<ProblemDetails>(
+                &json.replace("\"title\":\"Conflict\"", "\"title\":\" \"")
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<ProblemDetails>(&json.replace(",\"changed\":false", ""))
+                .is_err()
+        );
     }
 
     #[test]
@@ -215,5 +356,69 @@ mod tests {
     fn invalid_problem_status_is_rejected() {
         let code = ErrorCode::new("policy.denied").expect("registry code");
         assert!(ProblemDetails::new(code, 600, "Denied", "No", "req", false, false).is_err());
+    }
+
+    #[test]
+    fn problem_cbor_matches_published_vector() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors/api-problem.json");
+        let document = scoplen_test_vectors::VectorDocument::from_path(path).expect("vectors");
+        assert!(!document.vectors.is_empty(), "problem vector document must not be empty");
+        for vector in document.vectors.iter().filter(|vector| vector.kind == "api.problem.cbor") {
+            let problem: ProblemDetails = serde_json::from_str(&vector.input).expect("JSON input");
+            let expected = decode_hex(&vector.expected);
+            assert_eq!(problem.to_cbor().expect("encode"), expected, "{}", vector.id);
+            assert_eq!(ProblemDetails::from_cbor(&expected).expect("decode"), problem);
+        }
+    }
+
+    #[test]
+    fn problem_cbor_rejects_invalid_fields_and_accepts_extensions() {
+        let problem = ProblemDetails::new(
+            ErrorCode::new("sync.conflict").expect("code"),
+            409,
+            "Conflict",
+            "Retry.",
+            "r1",
+            false,
+            true,
+        )
+        .expect("problem");
+        let encoded = problem.to_cbor().expect("encode");
+        let Value::Map(mut fields) = cbor::decode(&encoded).expect("decode value") else {
+            panic!("problem is a map");
+        };
+        fields.push((Value::Text("extra".into()), Value::UInt(7)));
+        let with_extension = cbor::encode(&Value::Map(fields.clone())).expect("encode extension");
+        assert_eq!(ProblemDetails::from_cbor(&with_extension).expect("extension"), problem);
+
+        for key in ["type", "title", "status", "detail", "instance", "code", "changed", "retryable"]
+        {
+            let mut missing = fields.clone();
+            missing.retain(|(field, _)| field != &Value::Text(key.into()));
+            let bytes = cbor::encode(&Value::Map(missing)).expect("encode missing field");
+            assert!(ProblemDetails::from_cbor(&bytes).is_err(), "missing {key}");
+        }
+        let mut wrong_type = fields;
+        for (key, value) in &mut wrong_type {
+            if key == &Value::Text("changed".into()) {
+                *value = Value::UInt(0);
+            }
+        }
+        let bytes = cbor::encode(&Value::Map(wrong_type)).expect("encode wrong type");
+        assert!(ProblemDetails::from_cbor(&bytes).is_err());
+        assert!(ProblemDetails::from_cbor(&[0xbf, 0xff]).is_err());
+        assert!(ProblemDetails::from_cbor(&[0xf6]).is_err());
+    }
+
+    fn decode_hex(input: &str) -> Vec<u8> {
+        input
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                let text = std::str::from_utf8(pair).expect("ASCII hex");
+                u8::from_str_radix(text, 16).expect("hex byte")
+            })
+            .collect()
     }
 }

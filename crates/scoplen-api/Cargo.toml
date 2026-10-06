@@ -7,10 +7,12 @@ rust-version.workspace = true
 description = "Scoplen's versioned wire contracts and generated API types."
 
 [dependencies]
+scoplen-model = { path = "../scoplen-model", version = "0.1.0" }
 serde = { version = "1.0.219", features = ["derive"] }
 thiserror = "2.0.12"
 
 [dev-dependencies]
+scoplen-test-vectors = { path = "../scoplen-test-vectors", version = "0.1.0" }
 serde_json = "1.0.140"
 
 [lints]
