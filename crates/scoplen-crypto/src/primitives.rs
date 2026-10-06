@@ -37,6 +37,9 @@ pub enum PrimitiveError {
     /// A signature was malformed or did not verify.
     #[error("invalid signature")]
     InvalidSignature,
+    /// A serialized contract value was malformed.
+    #[error("invalid serialized encoding")]
+    InvalidEncoding,
 }
 
 /// Fill a caller-provided buffer with operating-system CSPRNG output.

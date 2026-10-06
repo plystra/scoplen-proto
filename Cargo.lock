@@ -740,9 +740,11 @@ dependencies = [
  "hpke",
  "p256",
  "rand_core",
+ "scoplen-model",
  "sha2",
  "subtle",
  "thiserror",
+ "uuid",
  "zeroize",
 ]
 
