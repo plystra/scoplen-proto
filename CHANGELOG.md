@@ -39,3 +39,6 @@ All notable changes to `scoplen-proto` will be recorded here.
 - Added content-free K-4 WebSocket notification codecs for vault advancement, pending rotation, and
   device revocation, with strict event validation, extension tolerance, failure-path tests, and
   published deterministic CBOR vectors.
+- Added K-4 account key-bundle GET and PUT codecs with opaque artifact limits, sorted device wraps
+  and certificate lists, signed canonical-CBOR input helpers, replay revision validation, failure
+  paths, and published deterministic CBOR vectors.
