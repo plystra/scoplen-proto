@@ -3,9 +3,11 @@
 
 use std::{collections::BTreeSet, fmt::Write as _, path::Path};
 
+use rand_core_010::{TryCryptoRng, TryRng};
 use scoplen_crypto::{
     AccountKemKeyPair, Argon2idParams, DeviceCertificate, DeviceKemKeyPair, Ed25519SigningKey,
-    HpkeCiphertext, LocalDatabaseKeyEnvelope, ObjectEnvelope, P256SigningKey, PairingQrPayload,
+    HpkeCiphertext, LocalDatabaseKeyEnvelope, ObjectEnvelope, P256SigningKey, PairingCode,
+    PairingContext, PairingInitiator, PairingQrPayload, PairingResponder, PairingRole,
     PrimitiveError, RecoveryBlob, RecoveryKey, RevocationStatement, SecretBytes, ShamirShare,
     XChaChaNonce, combine_shamir, ed25519_verify, hkdf_sha256, hpke_open_account, hpke_open_device,
     open_escrow_share_from_account, open_escrow_share_from_device, p256_verify, safety_number,
@@ -15,6 +17,42 @@ use scoplen_crypto::{
 use scoplen_model::Object;
 use scoplen_test_vectors::VectorDocument;
 use uuid::Uuid;
+
+struct VectorRng {
+    bytes: Vec<u8>,
+    offset: usize,
+}
+
+impl VectorRng {
+    fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes, offset: 0 }
+    }
+}
+
+impl TryRng for VectorRng {
+    type Error = std::convert::Infallible;
+
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        let mut bytes = [0; 4];
+        self.try_fill_bytes(&mut bytes)?;
+        Ok(u32::from_le_bytes(bytes))
+    }
+
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        let mut bytes = [0; 8];
+        self.try_fill_bytes(&mut bytes)?;
+        Ok(u64::from_le_bytes(bytes))
+    }
+
+    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+        let end = self.offset + destination.len();
+        destination.copy_from_slice(&self.bytes[self.offset..end]);
+        self.offset = end;
+        Ok(())
+    }
+}
+
+impl TryCryptoRng for VectorRng {}
 
 fn hex(bytes: impl AsRef<[u8]>) -> String {
     let mut output = String::with_capacity(bytes.as_ref().len() * 2);
@@ -352,6 +390,47 @@ fn fixture(kind: &str, input: &str, expected: &str) {
             assert_eq!(decoded.pairing_id(), pairing_id);
             decoded.verify_public_keys(&kem, &signing).expect("relay keys match QR");
         }
+        "crypto.cpace-pairing" => {
+            let f = fields(input, 8);
+            let e = fields(expected, 6);
+            let context =
+                PairingContext::new(uuid(f[0]), uuid(f[1]), uuid(f[2])).expect("pairing context");
+            let code = PairingCode::from_ascii(&unhex(f[3])).expect("pairing code");
+            let mut initiator_rng = VectorRng::new(unhex(f[4]));
+            let (initiator_state, initiator_share) =
+                PairingInitiator::start_with_rng(&context, &code, &mut initiator_rng)
+                    .expect("CPace initiator");
+            let mut responder_rng = VectorRng::new(unhex(f[5]));
+            let (responder, responder_share) = PairingResponder::respond_with_rng(
+                &context,
+                &code,
+                &initiator_share,
+                &mut responder_rng,
+            )
+            .expect("CPace responder");
+            let initiator = initiator_state.finish(&responder_share).expect("CPace finish");
+            assert_eq!(hex(initiator_share), e[0]);
+            assert_eq!(hex(responder_share), e[1]);
+            assert_eq!(hex(initiator.session_id()), e[2]);
+            let initiator_confirmation = initiator.confirmation().expect("initiator confirmation");
+            let responder_confirmation = responder.confirmation().expect("responder confirmation");
+            assert_eq!(hex(initiator_confirmation), e[3]);
+            assert_eq!(hex(responder_confirmation), e[4]);
+            initiator
+                .verify_peer_confirmation(&responder_confirmation)
+                .expect("initiator confirmation check");
+            responder
+                .verify_peer_confirmation(&initiator_confirmation)
+                .expect("responder confirmation check");
+            let frame = initiator
+                .seal_frame_with_nonce(&unhex(f[7]), &XChaChaNonce::new(fixed(f[6])))
+                .expect("CPace frame seal");
+            assert_eq!(hex(&frame), e[5]);
+            assert_eq!(
+                responder.open_frame(PairingRole::Initiator, &frame).expect("CPace frame open"),
+                unhex(f[7])
+            );
+        }
         other => panic!("unhandled crypto vector kind: {other}"),
     }
 }
@@ -387,6 +466,7 @@ fn published_crypto_known_answers() {
                 "crypto.escrow-account-open",
                 "crypto.escrow-device-open",
                 "crypto.qr-pairing",
+                "crypto.cpace-pairing",
             ]
             .map(str::to_owned)
         )

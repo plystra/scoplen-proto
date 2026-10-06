@@ -23,5 +23,8 @@ All notable changes to `scoplen-proto` will be recorded here.
   identifiers, forward-compatible vault kinds, and published session vectors.
 - Added the K-3 QR pairing payload, strict parser, and constant-time verification of relayed
   device keys against a published known-answer vector.
+- Added the K-3 typed-code CPace Ristretto255/SHA-512 exchange with fixed transcript context,
+  Crockford code parsing, zeroizing session material, constant-time confirmations, and a
+  nonce-checked XChaCha20-Poly1305 payload channel, with a published known-answer vector.
 - Added K-4 change-feed query and response codecs with canonical pagination parameters, strict
   ordering and cursor validation, failure-path coverage, and published deterministic CBOR vectors.

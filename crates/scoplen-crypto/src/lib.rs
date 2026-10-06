@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod certificate;
+mod cpace;
 mod envelope;
 mod escrow;
 mod hpke;
@@ -18,6 +19,10 @@ mod shamir;
 mod signature;
 
 pub use certificate::{DeviceCertificate, RevocationStatement, verify_device_list};
+pub use cpace::{
+    CPACE_CHANNEL_IDENTIFIER, PairingCode, PairingContext, PairingError, PairingInitiator,
+    PairingResponder, PairingRole, PairingSession,
+};
 pub use envelope::ObjectEnvelope;
 pub use escrow::{
     open_escrow_share_from_account, open_escrow_share_from_device, rewrap_escrow_share_to_device,
