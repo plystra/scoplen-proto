@@ -19,6 +19,8 @@ All notable changes to `scoplen-proto` will be recorded here.
   certificate preference; SSH transport and negotiation remain unimplemented.
 - Added the stable HTTP error-code registry and RFC 9457 problem details with JSON and deterministic
   CBOR codecs, including malformed-input tests and a published CBOR vector.
+- Extended the stable error-code registry for authenticated sync HTTP adapters with
+  `auth.authentication_required`, `sync.invalid_request`, and `sync.storage_unavailable`.
 - Added strict K-3 challenge, signed-device request, and token response JSON codecs with canonical
   nonce, UUIDv7, timestamp, signature, token-type, lifetime, and failure-path validation, plus
   published authentication vectors.
