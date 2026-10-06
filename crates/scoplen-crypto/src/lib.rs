@@ -22,14 +22,14 @@ pub use hpke::{
     hpke_seal_account, hpke_seal_device,
 };
 pub use keys::{
-    AccountKeys, AccountRootKey, DeviceKeys, LocalDatabaseKey, VaultKey, VaultKeyEpoch,
-    generate_account_keys, generate_device_keys, generate_symmetric_key, generate_vault_epoch,
-    unwrap_key_from_device, wrap_key_to_device,
+    AccountKeys, AccountRootKey, DeviceKeys, LocalDatabaseKey, LocalDatabaseKeyEnvelope, VaultKey,
+    VaultKeyEpoch, generate_account_keys, generate_device_keys, generate_symmetric_key,
+    generate_vault_epoch, unwrap_key_from_device, wrap_key_to_device,
 };
 pub use primitives::{
-    ARGON2_MEMORY_KIB, ARGON2_PARALLELISM, ARGON2_TIME_COST, PrimitiveError, argon2id_derive,
-    hkdf_sha256, random_bytes, random_key, random_nonce, xchacha20poly1305_open,
-    xchacha20poly1305_seal,
+    ARGON2_MEMORY_KIB, ARGON2_PARALLELISM, ARGON2_TIME_COST, Argon2idParams, PrimitiveError,
+    argon2id_derive, argon2id_derive_with_params, hkdf_sha256, random_bytes, random_key,
+    random_nonce, xchacha20poly1305_open, xchacha20poly1305_seal,
 };
 pub use recovery::safety_number;
 pub use recovery::{RecoveryBlob, RecoveryKey};

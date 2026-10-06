@@ -16,6 +16,53 @@ pub const ARGON2_TIME_COST: u32 = 3;
 /// Argon2id parallelism required by K-2.
 pub const ARGON2_PARALLELISM: u32 = 4;
 
+const MAX_ARGON2_MEMORY_KIB: u32 = 1024 * 1024;
+const MAX_ARGON2_TIME_COST: u32 = 32;
+const MAX_ARGON2_PARALLELISM: u32 = 32;
+
+/// Argon2id cost parameters stored with a local database-key wrapper.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Argon2idParams {
+    /// Memory cost in kibibytes.
+    pub memory_kib: u32,
+    /// Number of Argon2 passes.
+    pub time_cost: u32,
+    /// Number of lanes used by Argon2.
+    pub parallelism: u32,
+}
+
+impl Default for Argon2idParams {
+    fn default() -> Self {
+        Self {
+            memory_kib: ARGON2_MEMORY_KIB,
+            time_cost: ARGON2_TIME_COST,
+            parallelism: ARGON2_PARALLELISM,
+        }
+    }
+}
+
+impl Argon2idParams {
+    /// Validate bounded parameters before allocating the Argon2 working area.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrimitiveError::Argon2`] when a value is zero, exceeds the local safety bound,
+    /// or is too small for the requested parallelism.
+    pub fn validate(self) -> Result<(), PrimitiveError> {
+        if self.memory_kib == 0
+            || self.memory_kib > MAX_ARGON2_MEMORY_KIB
+            || self.time_cost == 0
+            || self.time_cost > MAX_ARGON2_TIME_COST
+            || self.parallelism == 0
+            || self.parallelism > MAX_ARGON2_PARALLELISM
+            || self.memory_kib < self.parallelism.saturating_mul(8)
+        {
+            return Err(PrimitiveError::Argon2("invalid Argon2id cost parameters".into()));
+        }
+        Ok(())
+    }
+}
+
 /// Errors returned by the K-2 primitive wrappers.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PrimitiveError {
@@ -96,7 +143,21 @@ pub fn hkdf_sha256(
 ///
 /// Returns [`PrimitiveError::Argon2`] when the fixed parameters are invalid or derivation fails.
 pub fn argon2id_derive(passphrase: &[u8], salt: &[u8; 16]) -> Result<SymmetricKey, PrimitiveError> {
-    let params = Params::new(ARGON2_MEMORY_KIB, ARGON2_TIME_COST, ARGON2_PARALLELISM, Some(32))
+    argon2id_derive_with_params(passphrase, salt, Argon2idParams::default())
+}
+
+/// Derive a 256-bit key with explicit, bounded Argon2id parameters.
+///
+/// # Errors
+///
+/// Returns [`PrimitiveError::Argon2`] when the parameters are invalid or derivation fails.
+pub fn argon2id_derive_with_params(
+    passphrase: &[u8],
+    salt: &[u8; 16],
+    cost: Argon2idParams,
+) -> Result<SymmetricKey, PrimitiveError> {
+    cost.validate()?;
+    let params = Params::new(cost.memory_kib, cost.time_cost, cost.parallelism, Some(32))
         .map_err(|error| PrimitiveError::Argon2(error.to_string()))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut output = [0; 32];
