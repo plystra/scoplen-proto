@@ -364,6 +364,33 @@ impl Object {
             None => Err(AccessError::Missing(field)),
         }
     }
+
+    /// Read a required byte string field.
+    pub fn required_bytes(&self, field: u64) -> Result<&[u8], AccessError> {
+        match self.field(field).map(|entry| &entry.value) {
+            Some(cbor::Value::Bytes(value)) => Ok(value),
+            Some(_) => Err(AccessError::WrongKind(field, "byte string")),
+            None => Err(AccessError::Missing(field)),
+        }
+    }
+
+    /// Read a required array field.
+    pub fn required_array(&self, field: u64) -> Result<&[cbor::Value], AccessError> {
+        match self.field(field).map(|entry| &entry.value) {
+            Some(cbor::Value::Array(value)) => Ok(value),
+            Some(_) => Err(AccessError::WrongKind(field, "array")),
+            None => Err(AccessError::Missing(field)),
+        }
+    }
+
+    /// Read a required map field.
+    pub fn required_map(&self, field: u64) -> Result<&[(cbor::Value, cbor::Value)], AccessError> {
+        match self.field(field).map(|entry| &entry.value) {
+            Some(cbor::Value::Map(value)) => Ok(value),
+            Some(_) => Err(AccessError::WrongKind(field, "map")),
+            None => Err(AccessError::Missing(field)),
+        }
+    }
 }
 
 /// Errors returned by typed scalar accessors.
@@ -496,9 +523,11 @@ enum ValueKind {
     Bool,
     Bytes,
     Uuid,
-    Map,
     ArrayOfUuid,
+    CredentialDeviceBinding,
+    SessionSpec,
     RouteReference,
+    VariableSpec,
 }
 
 #[derive(Clone, Copy)]
@@ -546,7 +575,8 @@ fn field_kind(object_type: ObjectType, field: u64) -> Option<FieldKind> {
     use FieldKind::{Map, Scalar};
     use MapKeyKind::{Text, Uuid};
     use ValueKind::{
-        ArrayOfUuid, Bool, Bytes, Map as MapValue, RouteReference, Text as TextValue, UInt,
+        ArrayOfUuid, Bool, Bytes, CredentialDeviceBinding, RouteReference, SessionSpec,
+        Text as TextValue, UInt, VariableSpec,
     };
     Some(match object_type {
         ObjectType::HOST => match field {
@@ -570,7 +600,7 @@ fn field_kind(object_type: ObjectType, field: u64) -> Option<FieldKind> {
             1 | 6 => Scalar(TextValue),
             2 | 3 => Scalar(UInt),
             4 => Scalar(Bytes),
-            5 => Map { key: Uuid, value: MapValue },
+            5 => Map { key: Uuid, value: CredentialDeviceBinding },
             7 => Map { key: Text, value: TextValue },
             8 => Scalar(ValueKind::Uuid),
             _ => return None,
@@ -597,7 +627,7 @@ fn field_kind(object_type: ObjectType, field: u64) -> Option<FieldKind> {
         },
         ObjectType::SNIPPET => match field {
             1 | 2 | 5 => Scalar(TextValue),
-            3 => Map { key: Text, value: MapValue },
+            3 => Map { key: Text, value: VariableSpec },
             4 => Map { key: Text, value: Bool },
             _ => return None,
         },
@@ -610,7 +640,7 @@ fn field_kind(object_type: ObjectType, field: u64) -> Option<FieldKind> {
         ObjectType::WORKSPACE => match field {
             1 => Scalar(TextValue),
             2 => Scalar(Bytes),
-            3 => Map { key: Uuid, value: MapValue },
+            3 => Map { key: Uuid, value: SessionSpec },
             _ => return None,
         },
         ObjectType::PREFERENCE => match field {
@@ -654,15 +684,17 @@ fn validate_value_kind(
         ValueKind::Uuid => {
             matches!(value, cbor::Value::Bytes(bytes) if parse_uuid_bytes(bytes).is_ok())
         }
-        ValueKind::Map => matches!(value, cbor::Value::Map(_)),
         ValueKind::ArrayOfUuid => {
             matches!(value, cbor::Value::Array(values) if values.iter().all(|value| matches!(value, cbor::Value::Bytes(bytes) if parse_uuid_bytes(bytes).is_ok())))
         }
+        ValueKind::CredentialDeviceBinding => validate_device_binding(value),
+        ValueKind::SessionSpec => validate_session_spec(value),
         ValueKind::RouteReference => match value {
             cbor::Value::UInt(0) => true,
             cbor::Value::Bytes(bytes) => parse_uuid_bytes(bytes).is_ok(),
             _ => false,
         },
+        ValueKind::VariableSpec => validate_variable_spec(value),
     };
     if valid {
         Ok(())
@@ -676,72 +708,241 @@ fn invalid_field(object: &Object, reason: &'static str) -> ModelError {
     ModelError::InvalidFields { object_type: object.object_type, reason }
 }
 
+fn validate_device_binding(value: &cbor::Value) -> bool {
+    let cbor::Value::Map(entries) = value else {
+        return false;
+    };
+    let mut public_key = false;
+    let mut label = false;
+    for (key, value) in entries {
+        let cbor::Value::UInt(key) = key else {
+            return false;
+        };
+        match (*key, value) {
+            (1, cbor::Value::Text(_)) => public_key = true,
+            (2, cbor::Value::Text(_)) => label = true,
+            (1 | 2, _) => return false,
+            _ => {}
+        }
+    }
+    public_key && label
+}
+
+fn validate_variable_spec(value: &cbor::Value) -> bool {
+    let cbor::Value::Map(entries) = value else {
+        return false;
+    };
+    let mut kind = None;
+    for (key, value) in entries {
+        let cbor::Value::UInt(key) = key else {
+            return false;
+        };
+        match *key {
+            1 => match value {
+                cbor::Value::UInt(value @ 1..=4) => kind = Some(*value),
+                _ => return false,
+            },
+            3 if matches!(value, cbor::Value::Array(_)) => {}
+            3 => return false,
+            _ => {}
+        }
+    }
+    kind.is_some()
+}
+
+fn validate_session_spec(value: &cbor::Value) -> bool {
+    let cbor::Value::Map(entries) = value else {
+        return false;
+    };
+    let mut profile = false;
+    let mut kind = None;
+    let mut forward = false;
+    for (key, value) in entries {
+        let cbor::Value::UInt(key) = key else {
+            return false;
+        };
+        match *key {
+            1 if matches!(value, cbor::Value::Bytes(bytes) if parse_uuid_bytes(bytes).is_ok()) => {
+                profile = true;
+            }
+            1 => return false,
+            2 => match value {
+                cbor::Value::UInt(value @ 1..=3) => kind = Some(*value),
+                _ => return false,
+            },
+            3 => {
+                if !matches!(value, cbor::Value::Bytes(bytes) if parse_uuid_bytes(bytes).is_ok()) {
+                    return false;
+                }
+                forward = true;
+            }
+            4 => {
+                if !matches!(value, cbor::Value::Text(_)) {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    match kind {
+        Some(3) => profile && forward,
+        Some(1 | 2) => profile && !forward,
+        _ => false,
+    }
+}
+
 fn validate_type_fields(object: &Object) -> Result<(), ModelError> {
     validate_field_shapes(object)?;
-    let invalid = |reason| ModelError::InvalidFields { object_type: object.object_type, reason };
     match object.object_type {
         ObjectType::HOST => {
-            object.required_text(1).map_err(|_| invalid("name is required"))?;
-            object.required_text(2).map_err(|_| invalid("address is required"))?;
+            object.required_text(1).map_err(|_| invalid_field(object, "name is required"))?;
+            object.required_text(2).map_err(|_| invalid_field(object, "address is required"))?;
             if let Some(entry) = object.field(3) {
                 if !matches!(entry.value, cbor::Value::UInt(_)) {
-                    return Err(invalid("port must be unsigned"));
+                    return Err(invalid_field(object, "port must be unsigned"));
                 }
             }
         }
         ObjectType::ACCESS_PROFILE => {
-            object.required_uuid(1).map_err(|_| invalid("host is required"))?;
-            object.required_text(3).map_err(|_| invalid("username is required"))?;
+            object.required_uuid(1).map_err(|_| invalid_field(object, "host is required"))?;
+            object.required_text(3).map_err(|_| invalid_field(object, "username is required"))?;
         }
-        ObjectType::CREDENTIAL => {
-            let kind = object.required_uint(2).map_err(|_| invalid("kind is required"))?;
-            let binding = object.required_uint(3).map_err(|_| invalid("binding is required"))?;
-            if !(1..=7).contains(&kind) || !(1..=3).contains(&binding) {
-                return Err(invalid("kind or binding is outside the registry"));
-            }
-            if [3, 5, 6].contains(&kind) && binding == 1 {
-                return Err(invalid("this credential kind cannot use shared binding"));
-            }
-            let has_secret = object.field(4).is_some();
-            if (binding == 1) != has_secret {
-                return Err(invalid("shared credentials require exactly one secret field"));
-            }
-        }
-        ObjectType::ROUTE => {
-            object.required_text(1).map_err(|_| invalid("name is required"))?;
-            let kind = object.required_uint(2).map_err(|_| invalid("kind is required"))?;
-            if !(1..=5).contains(&kind) {
-                return Err(invalid("kind is outside the registry"));
-            }
-        }
+        ObjectType::CREDENTIAL => validate_credential_fields(object)?,
+        ObjectType::ROUTE => validate_route_fields(object)?,
         ObjectType::HOST_GROUP => {
-            object.required_text(1).map_err(|_| invalid("name is required"))?;
+            object.required_text(1).map_err(|_| invalid_field(object, "name is required"))?;
         }
         ObjectType::SNIPPET => {
-            object.required_text(1).map_err(|_| invalid("name is required"))?;
-            object.required_text(2).map_err(|_| invalid("template is required"))?;
+            object.required_text(1).map_err(|_| invalid_field(object, "name is required"))?;
+            object.required_text(2).map_err(|_| invalid_field(object, "template is required"))?;
         }
         ObjectType::FORWARD => {
-            object.required_text(1).map_err(|_| invalid("name is required"))?;
-            let kind = object.required_uint(2).map_err(|_| invalid("kind is required"))?;
+            object.required_text(1).map_err(|_| invalid_field(object, "name is required"))?;
+            let kind =
+                object.required_uint(2).map_err(|_| invalid_field(object, "kind is required"))?;
             if !(1..=3).contains(&kind) {
-                return Err(invalid("kind is outside the registry"));
+                return Err(invalid_field(object, "kind is outside the registry"));
             }
         }
+        ObjectType::TRUST_RECORD => validate_trust_record_fields(object)?,
         ObjectType::WORKSPACE => {
-            object.required_text(1).map_err(|_| invalid("name is required"))?;
+            object.required_text(1).map_err(|_| invalid_field(object, "name is required"))?;
             if let Some(entry) = object.field(2) {
                 match &entry.value {
                     cbor::Value::Bytes(value) if value.len() <= MAX_WORKSPACE_LAYOUT_BYTES => {}
                     cbor::Value::Bytes(_) => return Err(ModelError::WorkspaceLayoutLimit),
-                    _ => return Err(invalid("layout must be bytes")),
+                    _ => return Err(invalid_field(object, "layout must be bytes")),
                 }
             }
         }
         ObjectType::PREFERENCE => {
-            object.required_text(1).map_err(|_| invalid("key is required"))?;
+            object.required_text(1).map_err(|_| invalid_field(object, "key is required"))?;
         }
         _ => {}
+    }
+    Ok(())
+}
+
+fn validate_credential_fields(object: &Object) -> Result<(), ModelError> {
+    let kind = object.required_uint(2).map_err(|_| invalid_field(object, "kind is required"))?;
+    let binding =
+        object.required_uint(3).map_err(|_| invalid_field(object, "binding is required"))?;
+    if !(1..=7).contains(&kind) || !(1..=3).contains(&binding) {
+        return Err(invalid_field(object, "kind or binding is outside the registry"));
+    }
+    if [3, 5, 6].contains(&kind) && binding == 1 {
+        return Err(invalid_field(object, "this credential kind cannot use shared binding"));
+    }
+    let has_secret = object.field(4).is_some();
+    if (binding == 1) != has_secret {
+        return Err(invalid_field(object, "shared credentials require exactly one secret field"));
+    }
+    if object.field(6).is_some() && ![2, 4].contains(&kind) {
+        return Err(invalid_field(
+            object,
+            "public key is only valid for key and agent credentials",
+        ));
+    }
+    if object.field(7).is_some() && kind != 7 {
+        return Err(invalid_field(object, "provider is only valid for external credentials"));
+    }
+    if object.field(8).is_some() && kind != 3 {
+        return Err(invalid_field(
+            object,
+            "certificate scope is only valid for certificate credentials",
+        ));
+    }
+    if kind == 3 && object.field(8).is_none() {
+        return Err(invalid_field(object, "certificate credentials require a certificate scope"));
+    }
+    Ok(())
+}
+
+fn validate_route_fields(object: &Object) -> Result<(), ModelError> {
+    object.required_text(1).map_err(|_| invalid_field(object, "name is required"))?;
+    let kind = object.required_uint(2).map_err(|_| invalid_field(object, "kind is required"))?;
+    if !(1..=5).contains(&kind) {
+        return Err(invalid_field(object, "kind is outside the registry"));
+    }
+    let field_present = |field| object.field(field).is_some();
+    match kind {
+        1 => {
+            if !field_present(3) {
+                return Err(invalid_field(object, "jump routes require hops"));
+            }
+            if [4, 5, 6, 7].into_iter().any(field_present) {
+                return Err(invalid_field(
+                    object,
+                    "jump routes cannot contain proxy, command, or gateway fields",
+                ));
+            }
+        }
+        2 | 3 => {
+            if !field_present(4) {
+                return Err(invalid_field(object, "proxy routes require a proxy"));
+            }
+            if [3, 6, 7].into_iter().any(field_present) {
+                return Err(invalid_field(
+                    object,
+                    "proxy routes cannot contain jump, command, or gateway fields",
+                ));
+            }
+        }
+        4 => {
+            if !field_present(6) {
+                return Err(invalid_field(object, "command routes require a command"));
+            }
+            if [3, 4, 5, 7].into_iter().any(field_present) {
+                return Err(invalid_field(
+                    object,
+                    "command routes cannot contain jump, proxy, or gateway fields",
+                ));
+            }
+        }
+        5 => {
+            if !field_present(7) {
+                return Err(invalid_field(object, "managed routes require a gateway network"));
+            }
+            if [3, 4, 5, 6].into_iter().any(field_present) {
+                return Err(invalid_field(
+                    object,
+                    "managed routes cannot contain jump, proxy, or command fields",
+                ));
+            }
+        }
+        _ => unreachable!("route kind was range-checked"),
+    }
+    Ok(())
+}
+
+fn validate_trust_record_fields(object: &Object) -> Result<(), ModelError> {
+    if object.field(1).is_none() && object.field(2).is_none() {
+        return Err(invalid_field(object, "trust records require a host or pattern"));
+    }
+    if let Some(provenance) = object.field(5) {
+        if !matches!(provenance.value, cbor::Value::UInt(1..=4)) {
+            return Err(invalid_field(object, "provenance is outside the registry"));
+        }
     }
     Ok(())
 }
@@ -901,6 +1102,24 @@ mod tests {
         object
     }
 
+    fn put_field(object: &mut Object, field: u64, value: cbor::Value, clock: u64) {
+        object
+            .insert(
+                FieldPath::field(field).expect("path"),
+                FieldEntry::new(value, Hlc::at(clock).expect("clock"), id(2)).expect("entry"),
+            )
+            .expect("insert");
+    }
+
+    fn put_map_entry(object: &mut Object, field: u64, key: MapKey, value: cbor::Value, clock: u64) {
+        object
+            .insert(
+                FieldPath::map_entry(field, key).expect("path"),
+                FieldEntry::new(value, Hlc::at(clock).expect("clock"), id(2)).expect("entry"),
+            )
+            .expect("insert");
+    }
+
     #[test]
     fn object_round_trips_with_unknown_fields() {
         let mut object = host();
@@ -931,6 +1150,35 @@ mod tests {
 
         let bytes = object.encode().expect("encode");
         assert_eq!(Object::decode(&bytes).expect("decode"), object);
+    }
+
+    #[test]
+    fn typed_accessors_cover_scalar_and_container_values() {
+        let object = host();
+        assert_eq!(object.required_text(1).expect("name"), "example");
+        assert_eq!(object.required_uint(3), Err(AccessError::Missing(3)));
+        assert_eq!(object.required_bytes(1), Err(AccessError::WrongKind(1, "byte string")));
+
+        let mut route = Object::new(id(4), ObjectType::ROUTE, 1).expect("route");
+        put_field(&mut route, 1, cbor::Value::Text("jump".into()), 1);
+        put_field(&mut route, 2, cbor::Value::UInt(1), 2);
+        put_field(&mut route, 3, cbor::Value::Array(vec![]), 3);
+        assert!(route.required_array(3).expect("hops").is_empty());
+
+        let mut workspace = Object::new(id(5), ObjectType::WORKSPACE, 1).expect("workspace");
+        put_field(&mut workspace, 1, cbor::Value::Text("workspace".into()), 1);
+        put_field(&mut workspace, 2, cbor::Value::Bytes(vec![1, 2]), 2);
+        assert_eq!(workspace.required_bytes(2).expect("layout"), [1, 2]);
+
+        let mut preference = Object::new(id(6), ObjectType::PREFERENCE, 1).expect("preference");
+        put_field(&mut preference, 1, cbor::Value::Text("theme".into()), 1);
+        put_field(
+            &mut preference,
+            2,
+            cbor::Value::Map(vec![(cbor::Value::Text("dark".into()), cbor::Value::Bool(true))]),
+            2,
+        );
+        assert_eq!(preference.required_map(2).expect("value").len(), 1);
     }
 
     #[test]
@@ -1104,5 +1352,93 @@ mod tests {
                 .expect("insert");
         }
         assert!(matches!(credential.validate(), Err(ModelError::InvalidFields { .. })));
+    }
+
+    #[test]
+    fn validates_nested_specs_and_conditional_registry_fields() {
+        let mut credential = Object::new(id(6), ObjectType::CREDENTIAL, 1).expect("credential");
+        put_field(&mut credential, 2, cbor::Value::UInt(6), 1);
+        put_field(&mut credential, 3, cbor::Value::UInt(2), 2);
+        put_map_entry(
+            &mut credential,
+            5,
+            MapKey::Bytes(id(3).into_bytes().to_vec()),
+            cbor::Value::Map(vec![(cbor::Value::UInt(1), cbor::Value::Text("key".into()))]),
+            3,
+        );
+        assert!(credential.validate().is_err());
+        put_map_entry(
+            &mut credential,
+            5,
+            MapKey::Bytes(id(3).into_bytes().to_vec()),
+            cbor::Value::Map(vec![
+                (cbor::Value::UInt(1), cbor::Value::Text("key".into())),
+                (cbor::Value::UInt(2), cbor::Value::Text("laptop".into())),
+            ]),
+            4,
+        );
+        credential.validate().expect("valid device binding");
+
+        let mut snippet = Object::new(id(7), ObjectType::SNIPPET, 1).expect("snippet");
+        put_field(&mut snippet, 1, cbor::Value::Text("snippet".into()), 1);
+        put_field(&mut snippet, 2, cbor::Value::Text("{{name}}".into()), 2);
+        put_map_entry(
+            &mut snippet,
+            3,
+            MapKey::Text("name".into()),
+            cbor::Value::Map(vec![(cbor::Value::UInt(1), cbor::Value::UInt(5))]),
+            3,
+        );
+        assert!(snippet.validate().is_err());
+        put_map_entry(
+            &mut snippet,
+            3,
+            MapKey::Text("name".into()),
+            cbor::Value::Map(vec![
+                (cbor::Value::UInt(1), cbor::Value::UInt(3)),
+                (cbor::Value::UInt(3), cbor::Value::Array(vec![cbor::Value::Text("admin".into())])),
+            ]),
+            4,
+        );
+        snippet.validate().expect("valid variable spec");
+
+        let mut workspace = Object::new(id(8), ObjectType::WORKSPACE, 1).expect("workspace");
+        put_field(&mut workspace, 1, cbor::Value::Text("workspace".into()), 1);
+        put_map_entry(
+            &mut workspace,
+            3,
+            MapKey::Bytes(id(4).into_bytes().to_vec()),
+            cbor::Value::Map(vec![
+                (cbor::Value::UInt(1), cbor::Value::Bytes(id(4).into_bytes().to_vec())),
+                (cbor::Value::UInt(2), cbor::Value::UInt(3)),
+            ]),
+            2,
+        );
+        assert!(workspace.validate().is_err());
+        put_map_entry(
+            &mut workspace,
+            3,
+            MapKey::Bytes(id(4).into_bytes().to_vec()),
+            cbor::Value::Map(vec![
+                (cbor::Value::UInt(1), cbor::Value::Bytes(id(4).into_bytes().to_vec())),
+                (cbor::Value::UInt(2), cbor::Value::UInt(3)),
+                (cbor::Value::UInt(3), cbor::Value::Bytes(id(5).into_bytes().to_vec())),
+                (cbor::Value::UInt(4), cbor::Value::Text("/tmp".into())),
+            ]),
+            3,
+        );
+        workspace.validate().expect("valid session spec");
+
+        let mut route = Object::new(id(9), ObjectType::ROUTE, 1).expect("route");
+        put_field(&mut route, 1, cbor::Value::Text("jump".into()), 1);
+        put_field(&mut route, 2, cbor::Value::UInt(1), 2);
+        assert!(route.validate().is_err());
+        put_field(&mut route, 3, cbor::Value::Array(vec![]), 3);
+        route.validate().expect("valid jump route");
+
+        let mut trust = Object::new(id(10), ObjectType::TRUST_RECORD, 1).expect("trust record");
+        assert!(trust.validate().is_err());
+        put_field(&mut trust, 2, cbor::Value::Text("*.example.com".into()), 1);
+        trust.validate().expect("pattern trust record");
     }
 }
