@@ -18,5 +18,3 @@ repository and vectors, then consumer pins. Every source file carries an SPDX he
 must use the Developer Certificate of Origin sign-off (`git commit -s`).
 
 Do not push, publish crates, or change shared history from an agent checkout.
-
-\n

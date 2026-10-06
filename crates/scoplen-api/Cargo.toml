@@ -8,5 +8,3 @@ description = "Scoplen's versioned wire contracts and generated API types."
 
 [lints]
 workspace = true
-
-\n

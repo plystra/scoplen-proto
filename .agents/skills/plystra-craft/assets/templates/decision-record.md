@@ -75,4 +75,3 @@ Examples:
 ## Related documents
 
 - ...
-\n

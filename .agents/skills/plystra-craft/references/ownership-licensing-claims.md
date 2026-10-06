@@ -66,4 +66,3 @@ Do not choose names that depend on another company's mark unless the project is 
 ## 8. Terms of use
 
 Provide terms of use or service where needed for the product's service model, commercial arrangements, or applicable law. Applicable terms must be available before the user accepts the relevant service or transaction. The format and content of legal documents must fit the actual product and jurisdiction; one standard document does not cover every case.
-\n

@@ -9,4 +9,3 @@
 
 /// The contract identifier used by the protocol-core crate.
 pub const CONTRACT: &str = "K-7";
-\n

@@ -213,4 +213,3 @@ Before publishing documentation, ask:
 7. Does it link to related docs?
 8. Would this still be useful six months from now?
 9. Does it match the current implementation and configuration surface?
-\n

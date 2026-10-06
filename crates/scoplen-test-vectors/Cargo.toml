@@ -13,5 +13,3 @@ thiserror = "2.0.12"
 
 [lints]
 workspace = true
-
-\n

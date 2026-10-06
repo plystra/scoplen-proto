@@ -46,4 +46,3 @@ jobs:
         run: cargo deny check
       - name: Cargo audit
         run: cargo audit
-\n

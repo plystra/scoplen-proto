@@ -81,4 +81,3 @@ These review and correction periods do not suspend effective obligations or post
 Do not call a project fully compliant while applicable gaps remain or a required review is overdue. State the reviewed version and actual status instead. If a deadline cannot be met, inform Plystra's steward before it passes and decide how to restrict or pause the affected work, correct the rule through the shared revision process if it is wrong, or change the project's association. A local exception or an indefinitely renewed plan is not a resolution.
 
 Review evidence may remain private when it contains sensitive details. Public claims must still be accurate and must not imply that a review, certification, or security guarantee exists beyond the evidence recorded.
-\n

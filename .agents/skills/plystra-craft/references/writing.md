@@ -231,4 +231,3 @@ Use these words when they are accurate:
 - long-lived.
 
 Do not overuse them. A vocabulary becomes a costume when repeated too often.
-\n

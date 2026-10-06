@@ -8,5 +8,3 @@ description = "Scoplen's reviewed cryptographic formats and key operations."
 
 [lints]
 workspace = true
-
-\n

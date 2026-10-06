@@ -46,4 +46,3 @@ Inspect the project's existing records, README, and `PROJECT_PRINCIPLES.md` befo
 State what was checked and what remains unverified. Separate current behavior from plans. Completing a task, or keeping an adoption record, does not make a project fully compliant; only the review described in [applying Craft](references/applying-craft.md) establishes status.
 
 The references are generated snapshots of the canonical Craft sources. The [index](references/index.md) lists each one with its source, and the [source ledger](references/sources.json) records the version and hashes. Keep the [license](references/LICENSE) when reusing them.
-\n

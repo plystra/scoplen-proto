@@ -17,5 +17,3 @@ path = "fuzz_targets/vector_loader.rs"
 test = false
 doc = false
 bench = false
-
-\n

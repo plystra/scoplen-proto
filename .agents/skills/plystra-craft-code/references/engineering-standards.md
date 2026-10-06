@@ -174,4 +174,3 @@ When a Plystra project uses AI:
 - AI calls should have timeouts and failure handling.
 
 User review and status labels follow [legibility over magic](https://github.com/plystra/craft/blob/main/principles/02-product-principles.md#2-prefer-legibility-over-magic). Sending private content to providers follows [AI and private data](https://github.com/plystra/craft/blob/main/principles/09-security-and-privacy.md#10-ai-and-private-data).
-\n

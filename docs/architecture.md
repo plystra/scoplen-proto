@@ -14,5 +14,3 @@ no runtime dependency on either consumer.
 The baseline keeps crate roots intentionally small. Later gates add contract behavior in the order
 defined by `scoplen-docs/17-implementation-roadmap.md`; no consumer may define a second copy of a
 wire format or cryptographic construction.
-
-\n

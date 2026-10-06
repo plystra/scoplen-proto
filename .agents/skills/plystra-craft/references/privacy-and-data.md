@@ -46,4 +46,3 @@ Data deletion and export behavior must be honest.
 Do not claim complete deletion if backups, logs, audit trails, or third-party processors retain data for a period of time. Explain the actual behavior.
 
 Exports should prefer formats that preserve meaning, not only raw dumps.
-\n

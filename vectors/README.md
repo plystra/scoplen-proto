@@ -7,5 +7,3 @@ owns a kind validates its encoding and interprets the values.
 
 The format is deliberately small at S1. Contract-specific vector kinds and canonical encodings are
 added with the corresponding contract gate and are consumed by both client and server workstreams.
-
-\n

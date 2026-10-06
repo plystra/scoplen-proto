@@ -56,4 +56,3 @@ Plystra may be ambitious, but it should not be grandiose. It should let the qual
 ## 9. Project retirement
 
 Retiring a project is acceptable. Abandoning a project silently is not. A retired project follows the [retirement requirements](release-and-maintenance.md#9-retirement).
-\n

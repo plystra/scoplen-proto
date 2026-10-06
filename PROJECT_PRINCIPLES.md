@@ -24,5 +24,3 @@ after its contract is specified in `scoplen-docs` and covered by vectors and fai
 
 - The S1 baseline is the current implementation boundary; S2–S7 behavior is not yet present.
 - Independent security review and interoperability evidence are required before a Stable release.
-
-\n

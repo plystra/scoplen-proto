@@ -166,4 +166,3 @@ How actively a project is maintained, including retirement, is stated separately
 Do not use `Stable` because the project feels polished. Use it when maintenance, support, documentation, and upgrade expectations are also stable.
 
 Before public announcement, a project also passes the [public launch checklist](release-and-maintenance.md#10-public-launch-checklist).
-\n

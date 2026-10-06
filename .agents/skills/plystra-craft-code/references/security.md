@@ -131,4 +131,3 @@ Before shipping a feature involving user data:
 9. Does documentation match implementation?
 10. Is an accurate privacy notice available before any real user data is collected, including in private tests?
 11. Are transfers of private content to AI providers or other third parties within valid, explicit authorization for the purpose, recipient, and data scope?
-\n

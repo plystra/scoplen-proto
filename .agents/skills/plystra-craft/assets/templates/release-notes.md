@@ -57,4 +57,3 @@ Explain whether rollback is safe and what data compatibility issues may exist.
 ## Contributors
 
 - ...
-\n

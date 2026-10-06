@@ -8,5 +8,3 @@ description = "Scoplen's deterministic object model and merge rules."
 
 [lints]
 workspace = true
-
-\n

@@ -27,4 +27,3 @@ Read the target repository's own guidance, worktree state, and existing commands
 Do not turn an ordinary fix into a full security or release audit. Report what changed, what was verified, and what could not be.
 
 The [index](references/index.md) and [source ledger](references/sources.json) identify the canonical sources of this snapshot. Keep the [license](references/LICENSE) when reusing them.
-\n

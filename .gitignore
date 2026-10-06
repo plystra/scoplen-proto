@@ -4,4 +4,3 @@
 .cargo/config.toml
 
 /fuzz/target/
-\n

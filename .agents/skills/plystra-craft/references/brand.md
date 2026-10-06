@@ -176,4 +176,3 @@ Before publishing a project, page, document, or public announcement, ask:
 5. Is the Plystra name making this stronger, or merely decorating it?
 
 If the answer is uncertain, simplify.
-\n

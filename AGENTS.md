@@ -8,5 +8,3 @@ keep shared contracts in this repository, and do not depend on client or server 
 
 Use the pinned Rust toolchain and run `cargo fmt --all -- --check`, `cargo test --workspace`, and
 `cargo clippy --workspace --all-targets --all-features -- -D warnings` before review.
-
-\n

@@ -142,4 +142,3 @@ State the actual license terms and link to them, following [licenses](../../refe
 ## About Plystra, if relevant
 
 Describe Plystra with the [Charter identity statement](../../references/charter-commitments.md#1-identity), consistent with the relationship stated above.
-\n

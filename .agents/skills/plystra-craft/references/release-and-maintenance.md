@@ -135,4 +135,3 @@ Before a Plystra project is announced publicly, check that it has:
 9. A [privacy notice](privacy-and-data.md#9-privacy-notice) and [processing authorization](privacy-and-data.md#10-ai-and-private-data) in place before any real user data is collected or private content is sent to a third party, with actual handling matching the notice.
 10. Any applicable service or transaction terms, available before acceptance.
 11. Examples free of secrets and private infrastructure details.
-\n

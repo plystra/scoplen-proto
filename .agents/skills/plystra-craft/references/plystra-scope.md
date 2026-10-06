@@ -21,4 +21,3 @@ Throughout this repository, **Plystra projects** means Plystra-owned projects an
 The full philosophy is this README, the [Charter](https://github.com/plystra/craft/blob/main/CHARTER.md), [Applying and Updating the Philosophy](applying-craft.md), and every document in `principles/`. It covers new and existing projects. A distinct name, domain, technical stack, business model, or maturity level does not exempt an owned project or a sub-brand project, and a sub-brand cannot exempt the projects under it. [ADOPTION.md](applying-craft.md) defines requirement levels, which provisions apply to which kinds of work, versions, and review deadlines.
 
 Sponsorship, a shared author, or voluntary adoption of the philosophy does not by itself establish ownership, a sub-brand relationship, or permission to use the Plystra brand. Association must be confirmed by Plystra's steward.
-\n

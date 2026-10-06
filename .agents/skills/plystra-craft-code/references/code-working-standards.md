@@ -209,4 +209,3 @@ A code project change is complete only when:
 - documentation and configuration examples were [synchronized](https://github.com/plystra/craft/blob/main/principles/08-documentation-standards.md#8-documentation-sync);
 - temporary artifacts were cleaned up;
 - the final report accurately states what changed, where it changed, what was verified, what could not be verified, and any required maintainer action.
-\n

@@ -7,4 +7,3 @@
 
 /// The contract identifier implemented by this crate.
 pub const CONTRACT: &str = "K-2";
-\n

@@ -39,5 +39,3 @@ Do not put secrets or private infrastructure details in issues, examples, vector
 ## License
 
 The source code is Apache-2.0. See [LICENSE](LICENSE).
-
-\n
