@@ -23,6 +23,7 @@ after its contract is specified in `scoplen-docs` and covered by vectors and fai
 ## Open gaps
 
 - The S1 baseline and S2 object-model gate are complete, including schema handling, model limits,
-  merge laws, and known-answer vectors. S3 has its symmetric primitive boundary; key hierarchy,
-  asymmetric, envelope, recovery, and pairing behavior remains open, as do S4–S7 contracts.
+  merge laws, and known-answer vectors. S3 has its symmetric, signature, and HPKE primitive
+  boundaries; key hierarchy, envelope, recovery, and pairing behavior remains open, as do S4–S7
+  contracts.
 - Independent security review and interoperability evidence are required before a Stable release.

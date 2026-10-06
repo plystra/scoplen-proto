@@ -11,3 +11,5 @@ All notable changes to `scoplen-proto` will be recorded here.
   CBOR and merge known-answer vectors (roadmap S2).
 - Added the S3 primitive boundary: redacted zeroizing secrets, system randomness,
   XChaCha20-Poly1305, HKDF-SHA-256, and the specified Argon2id derivation.
+- Added P-256 and Ed25519 signing wrappers and HPKE base-mode wrapping for device and account
+  recipients, with malformed-input and authentication failure tests.

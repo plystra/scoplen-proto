@@ -31,6 +31,12 @@ pub enum PrimitiveError {
     /// Argon2id parameters or execution failed.
     #[error("Argon2id derivation failed: {0}")]
     Argon2(String),
+    /// A serialized public or private key was malformed.
+    #[error("invalid key material")]
+    InvalidKey,
+    /// A signature was malformed or did not verify.
+    #[error("invalid signature")]
+    InvalidSignature,
 }
 
 /// Fill a caller-provided buffer with operating-system CSPRNG output.
