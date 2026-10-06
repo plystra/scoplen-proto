@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 2,
+  "generator": "tooling/build-skills.ts",
+  "skill": "plystra-craft-code",
+  "craftVersion": "1.0.1",
+  "canonicalBaseUrl": "https://github.com/plystra/craft/blob/main/",
+  "sources": [
+    {
+      "path": "principles/12-code-project-working-standards.md",
+      "sha256": "480373a21172342d5b705112d7f4a3742ad7d25e9f7a0c4ad1dbfb23fc00601b",
+      "selection": null,
+      "output": "references/code-working-standards.md"
+    },
+    {
+      "path": "principles/07-engineering-standards.md",
+      "sha256": "96bb9b7e31ee22fc685a07da16c47fc76891de387c9790d91ee522163a130b11",
+      "selection": null,
+      "output": "references/engineering-standards.md"
+    },
+    {
+      "path": "principles/09-security-and-privacy.md",
+      "sha256": "f659ce1acb7d7cdc7429e2c96d748b893b45b0d94112035518630af9557242e6",
+      "selection": [
+        "1. Security posture",
+        "2. Basic security requirements",
+        "3. Secret handling",
+        "4. Authentication and sessions",
+        "5. Authorization and access control",
+        "6. Common vulnerabilities and misuse",
+        "7. Payments and financial data",
+        "8. Logging",
+        "12. Security review checklist"
+      ],
+      "output": "references/security.md"
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "9e5f1b3c610b9c2da5c313bf81d577a7d1acec686bdb0384edefa6df0f90cd94",
+      "selection": null,
+      "output": "references/LICENSE"
+    }
+  ],
+  "outputs": [
+    {
+      "path": "references/code-working-standards.md",
+      "sha256": "f29fde0c174e6e21426d35bd8aacebec847884f557fcad1db321a4dcf3587b12"
+    },
+    {
+      "path": "references/engineering-standards.md",
+      "sha256": "45ca2ba4e7bcb593c89a9ee8dab44137a38f05c689ad8bab6aa94c60f7af8d04"
+    },
+    {
+      "path": "references/index.md",
+      "sha256": "fe4d92b1b76b1fa67b4164748b2091872d5582ff98107b6d05e1be142c98ee24"
+    },
+    {
+      "path": "references/LICENSE",
+      "sha256": "9e5f1b3c610b9c2da5c313bf81d577a7d1acec686bdb0384edefa6df0f90cd94"
+    },
+    {
+      "path": "references/security.md",
+      "sha256": "cb74273962fb2e25ab8c499093c9e5f801cca2b81233daa2fe9dbeb4177f836e"
+    }
+  ]
+}
+\n

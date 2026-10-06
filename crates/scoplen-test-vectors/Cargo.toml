@@ -1,0 +1,17 @@
+[package]
+name = "scoplen-test-vectors"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Shared known-answer vector format and loader for Scoplen."
+
+[dependencies]
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+thiserror = "2.0.12"
+
+[lints]
+workspace = true
+
+\n

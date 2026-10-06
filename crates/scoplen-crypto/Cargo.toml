@@ -1,0 +1,12 @@
+[package]
+name = "scoplen-crypto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Scoplen's reviewed cryptographic formats and key operations."
+
+[lints]
+workspace = true
+
+\n

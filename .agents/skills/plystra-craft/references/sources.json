@@ -1,0 +1,184 @@
+{
+  "schemaVersion": 2,
+  "generator": "tooling/build-skills.ts",
+  "skill": "plystra-craft",
+  "craftVersion": "1.0.1",
+  "canonicalBaseUrl": "https://github.com/plystra/craft/blob/main/",
+  "sources": [
+    {
+      "path": "ADOPTION.md",
+      "sha256": "f7cad0d0eba051061a94d90c03f6de404693739cf70d33c121fe9a9f7aad4675",
+      "selection": null,
+      "output": "references/applying-craft.md"
+    },
+    {
+      "path": "README.md",
+      "sha256": "a23e761a0bc1e8e63106c2b0847e215b5e58569ca38512ee1226affbb820e280",
+      "selection": [
+        "Scope and project relationships"
+      ],
+      "output": "references/plystra-scope.md"
+    },
+    {
+      "path": "CHARTER.md",
+      "sha256": "1bcfa03a059ab151a9bb06a29b276b96728dcdb1973f70a10a684105fc323e9a",
+      "selection": [
+        "1. Identity",
+        "5. What Plystra avoids",
+        "6. The standard of care",
+        "7. Public posture",
+        "9. Project retirement"
+      ],
+      "output": "references/charter-commitments.md"
+    },
+    {
+      "path": "principles/01-brand-philosophy.md",
+      "sha256": "450f9cde16b8f87524d5c215bfbdeab3718d32baed14b3dbde4f84067d6bb065",
+      "selection": null,
+      "output": "references/brand.md"
+    },
+    {
+      "path": "principles/02-product-principles.md",
+      "sha256": "e1639b76c3f3bbb75b0b163930cc2786bc9a9838e8720c2a0ec74d443e2cab45",
+      "selection": null,
+      "output": "references/product.md"
+    },
+    {
+      "path": "principles/03-language-and-writing.md",
+      "sha256": "e95682692b825a6c0dfeea0e9d83577075d177ecb0dbc681def4b0dd5c112bb7",
+      "selection": null,
+      "output": "references/writing.md"
+    },
+    {
+      "path": "principles/08-documentation-standards.md",
+      "sha256": "d00a1734cf18d4eebc2916d264d45d5e009e48101e11ec20ef4e835b8c442989",
+      "selection": null,
+      "output": "references/documentation.md"
+    },
+    {
+      "path": "principles/09-security-and-privacy.md",
+      "sha256": "f659ce1acb7d7cdc7429e2c96d748b893b45b0d94112035518630af9557242e6",
+      "selection": [
+        "9. Privacy notice",
+        "10. AI and private data",
+        "11. Data deletion and export"
+      ],
+      "output": "references/privacy-and-data.md"
+    },
+    {
+      "path": "principles/10-release-and-maintenance.md",
+      "sha256": "2edc186b13131bb52fe8f68bbbd502f34f3db5dee0a3b70696690e2523bf9086",
+      "selection": null,
+      "output": "references/release-and-maintenance.md"
+    },
+    {
+      "path": "principles/11-governance-and-legal.md",
+      "sha256": "f6879b787d19f1c389de9669138f29b692bed2e6caa395971bd4cdbaa71a80e3",
+      "selection": [
+        "2. Ownership and attribution",
+        "3. Licenses",
+        "4. Contributor expectations",
+        "5. Trademarks and naming",
+        "8. Terms of use"
+      ],
+      "output": "references/ownership-licensing-claims.md"
+    },
+    {
+      "path": "templates/project-principles.md",
+      "sha256": "5af9e8d875936e8fdace4d9c21964432071abfe905f1c7ed6a159782c5b40cc1",
+      "selection": null,
+      "output": "assets/templates/project-principles.md"
+    },
+    {
+      "path": "templates/project-readme.md",
+      "sha256": "b749ca4efd6558ab50d0fb0a0b9b628490e031bf7b6eb68cf507eae725cbc08f",
+      "selection": null,
+      "output": "assets/templates/project-readme.md"
+    },
+    {
+      "path": "templates/decision-record.md",
+      "sha256": "43fec6c265b3a5e443f6ad3382088f1b6fddedb2d96df2d1e7012c67eebc8f30",
+      "selection": null,
+      "output": "assets/templates/decision-record.md"
+    },
+    {
+      "path": "templates/release-notes.md",
+      "sha256": "7ddf80f8dc7dbbc1205c3eaef4b2aa56c0075d4872a64cbc086b88b17e33b5a7",
+      "selection": null,
+      "output": "assets/templates/release-notes.md"
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "9e5f1b3c610b9c2da5c313bf81d577a7d1acec686bdb0384edefa6df0f90cd94",
+      "selection": null,
+      "output": "references/LICENSE"
+    }
+  ],
+  "outputs": [
+    {
+      "path": "assets/templates/decision-record.md",
+      "sha256": "23cfb7a1cf5040ee5eac77d872b10479b28881c584ddc67a42b5f7f69eb58a11"
+    },
+    {
+      "path": "assets/templates/project-principles.md",
+      "sha256": "0f07900e6e37e604d11b864f65d083426b0dea19a434a94d691996c23e70c622"
+    },
+    {
+      "path": "assets/templates/project-readme.md",
+      "sha256": "8e841303104c9767de6021702df081c61c5a48787854f2c73ff45e5b02ae72f9"
+    },
+    {
+      "path": "assets/templates/release-notes.md",
+      "sha256": "3fab4b05eb338d4d13e0ae87168ea94421f4d2e00d87482304c21d4fc3552fc1"
+    },
+    {
+      "path": "references/applying-craft.md",
+      "sha256": "842197e5bb1b30463c8e5c6cff4e6b8d47625e8335f1925bf3a8c8ca134114d6"
+    },
+    {
+      "path": "references/brand.md",
+      "sha256": "f305382b85363d08e3cf38ca39c47dd0b98c62b086e17824bd7ffeb45b0897f2"
+    },
+    {
+      "path": "references/charter-commitments.md",
+      "sha256": "4c37788fdeef353fee2a2d7229a9bae33220e08bb308434fb378f68a991c149d"
+    },
+    {
+      "path": "references/documentation.md",
+      "sha256": "edac6b8b0a93a9247073a83d8aa4877f3915a74de4dd4da9aec4d40291c2195b"
+    },
+    {
+      "path": "references/index.md",
+      "sha256": "5fbbca724f311f9818d9328706a970b7cbd855c535db1661aadc336ead769ed2"
+    },
+    {
+      "path": "references/LICENSE",
+      "sha256": "9e5f1b3c610b9c2da5c313bf81d577a7d1acec686bdb0384edefa6df0f90cd94"
+    },
+    {
+      "path": "references/ownership-licensing-claims.md",
+      "sha256": "c5c2fd5db08f5a552ab3751598e4bb3f001febd13012f88c563805b219a51a4d"
+    },
+    {
+      "path": "references/plystra-scope.md",
+      "sha256": "3968ac53a7c355431fc3763be256c6351bdec78d362cfa916ae2b332900d17b3"
+    },
+    {
+      "path": "references/privacy-and-data.md",
+      "sha256": "d2573a40b71f11fac43073a8a704d4f5dcdd22c8270b5c21f7d5410987408bfe"
+    },
+    {
+      "path": "references/product.md",
+      "sha256": "a1baa39cbd7b9b0189002c376f3818901846b4f9258751ac9d33e48315dce8b3"
+    },
+    {
+      "path": "references/release-and-maintenance.md",
+      "sha256": "f842ed3f644864eea2d1ee6458d717bb9fbc3f55441c74da4726ee01c5e2d510"
+    },
+    {
+      "path": "references/writing.md",
+      "sha256": "16316440ddbc28a254abff589f4bd3b54611e79656d2c991981868f91dfdea7f"
+    }
+  ]
+}
+\n

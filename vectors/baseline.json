@@ -1,0 +1,14 @@
+{
+  "format": "scoplen-test-vectors",
+  "version": 1,
+  "vectors": [
+    {
+      "id": "baseline-loader-roundtrip",
+      "kind": "model.cbor",
+      "input": "00",
+      "expected": "00"
+    }
+  ]
+}
+
+\n

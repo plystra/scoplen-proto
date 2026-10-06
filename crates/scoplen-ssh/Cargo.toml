@@ -1,0 +1,12 @@
+[package]
+name = "scoplen-ssh"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Scoplen's shared SSH protocol core."
+
+[lints]
+workspace = true
+
+\n

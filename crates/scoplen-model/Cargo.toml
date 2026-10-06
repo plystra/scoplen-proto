@@ -1,0 +1,12 @@
+[package]
+name = "scoplen-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Scoplen's deterministic object model and merge rules."
+
+[lints]
+workspace = true
+
+\n

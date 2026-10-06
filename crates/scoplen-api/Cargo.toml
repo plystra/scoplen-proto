@@ -1,0 +1,12 @@
+[package]
+name = "scoplen-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Scoplen's versioned wire contracts and generated API types."
+
+[lints]
+workspace = true
+
+\n

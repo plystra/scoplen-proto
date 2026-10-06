@@ -1,0 +1,7 @@
+/target/
+/fuzz/artifacts/
+/fuzz/corpus/
+.cargo/config.toml
+
+/fuzz/target/
+\n
