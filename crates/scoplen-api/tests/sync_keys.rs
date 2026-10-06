@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use scoplen_api::sync::{
-    MAX_SYNC_KEY_ARTIFACT_BYTES, MAX_SYNC_KEY_BODY_BYTES, SYNC_KEY_SIGNATURE_BYTES,
-    SyncAccountDeviceWrap, SyncAccountKeyBundle, SyncAccountKeyBundlePutResponse,
-    SyncAccountKeyBundleUpdate, sync_keys_signature_input,
+    MAX_SYNC_KEY_ARTIFACT_BYTES, MAX_SYNC_KEY_BODY_BYTES, MAX_SYNC_KEY_DEVICE_WRAPS,
+    SYNC_KEY_SIGNATURE_BYTES, SyncAccountDeviceWrap, SyncAccountKeyBundle,
+    SyncAccountKeyBundlePutResponse, SyncAccountKeyBundleUpdate, sync_keys_signature_input,
 };
 use scoplen_model::cbor::{self, Value};
 use serde_json::Value as JsonValue;
@@ -11,6 +11,11 @@ use uuid::Uuid;
 
 fn id(last: u8) -> Uuid {
     Uuid::from_bytes([0, 0, 0, 0, 0, 0, 0x70, 0, 0x80, 0, 0, 0, 0, 0, 0, last])
+}
+
+fn numbered_id(number: u16) -> Uuid {
+    let [high, low] = number.to_be_bytes();
+    Uuid::from_bytes([0, 0, 0, 0, 0, 0, 0x70, 0, 0x80, 0, 0, 0, 0, 0, high, low])
 }
 
 fn bundle() -> SyncAccountKeyBundle {
@@ -119,6 +124,14 @@ fn key_bundle_codecs_reject_failure_paths() {
     invalid = source.clone();
     invalid.device_wraps.clear();
     assert!(invalid.to_cbor().is_err(), "empty wraps");
+    invalid = source.clone();
+    invalid.device_wraps = (1..=u16::try_from(MAX_SYNC_KEY_DEVICE_WRAPS + 1).expect("wrap limit"))
+        .map(|number| SyncAccountDeviceWrap {
+            device_id: numbered_id(number),
+            wrapped_ark: vec![1],
+        })
+        .collect();
+    assert!(invalid.to_cbor().is_err(), "too many wraps");
 
     let mut noncanonical_uuid = source.clone();
     noncanonical_uuid.device_wraps[0].device_id = Uuid::nil();
