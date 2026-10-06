@@ -9,6 +9,8 @@ use scoplen_model::cbor::{self, Value};
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 
+pub mod sync;
+
 /// Contract identifiers realized by this crate.
 pub const CONTRACTS: &[&str] = &["K-3", "K-4", "K-5", "K-6"];
 
@@ -33,7 +35,7 @@ pub enum ApiContractError {
     #[error("invalid problem details: {0}")]
     InvalidProblem(String),
     /// A CBOR body was not deterministic or could not be encoded.
-    #[error("invalid problem CBOR: {0}")]
+    #[error("invalid deterministic CBOR: {0}")]
     Cbor(#[from] cbor::Error),
 }
 
