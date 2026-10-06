@@ -11,7 +11,9 @@ under Apache-2.0.
 Maturity: Exploration. Maintenance: Active. The repository baseline (roadmap gate S1) and the K-1
 object model (roadmap gate S2) are complete. The model includes deterministic CBOR, schema-version
 handling, per-object limits, merge properties, and executable known-answer vectors. Protocol,
-cryptographic, and wire behavior is added only from the canonical specifications in `scoplen-docs`.
+cryptographic, and wire behavior is added only from the canonical specifications in `scoplen-docs`;
+the S3 primitive boundary now includes zeroizing secret containers, operating-system randomness,
+XChaCha20-Poly1305, HKDF-SHA-256, and Argon2id.
 
 ## Repository shape
 

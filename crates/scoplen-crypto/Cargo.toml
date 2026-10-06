@@ -6,5 +6,15 @@ license.workspace = true
 rust-version.workspace = true
 description = "Scoplen's reviewed cryptographic formats and key operations."
 
+[dependencies]
+argon2 = "0.5.3"
+chacha20poly1305 = "0.10.1"
+getrandom = "0.3.4"
+hkdf = "0.12.4"
+sha2 = "0.10.9"
+subtle = "2.6.1"
+thiserror.workspace = true
+zeroize = { version = "1.8.1", features = ["derive"] }
+
 [lints]
 workspace = true
