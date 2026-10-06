@@ -198,6 +198,8 @@ fn uuid(bytes: &[u8]) -> Result<Uuid, ()> {
 mod tests {
     use super::*;
     use crate::{FieldEntry, ObjectType, cbor::Value, clock::Hlc};
+    use proptest::prelude::*;
+    use unicode_normalization::UnicodeNormalization;
 
     fn id(seed: u8) -> Uuid {
         let mut bytes = [0; 16];
@@ -228,6 +230,74 @@ mod tests {
             )
             .expect("insert");
         object
+    }
+
+    fn arb_object(origin: u8) -> impl Strategy<Value = Object> {
+        (
+            proptest::collection::vec(any::<char>(), 0..64),
+            0_u64..=1_000,
+            any::<u64>(),
+            any::<bool>(),
+            prop::option::of(0_u64..=1_000),
+        )
+            .prop_map(move |(name, clock, schema, favorite, tombstone_clock)| {
+                let name: String = name.into_iter().collect::<String>().nfc().collect();
+                let mut object = object(&name, clock, origin);
+                object.schema = schema;
+                object
+                    .insert(
+                        FieldPath::field(6).expect("path"),
+                        FieldEntry::new(
+                            Value::Bool(favorite),
+                            Hlc::at(clock.saturating_add(1)).expect("clock"),
+                            id(origin),
+                        )
+                        .expect("entry"),
+                    )
+                    .expect("insert");
+                object
+                    .insert(
+                        FieldPath::field(99).expect("path"),
+                        FieldEntry::new(
+                            Value::Text("unknown".into()),
+                            Hlc::at(clock.saturating_add(2)).expect("clock"),
+                            id(origin),
+                        )
+                        .expect("entry"),
+                    )
+                    .expect("insert");
+                if let Some(clock) = tombstone_clock {
+                    object.set_tombstone(Some(
+                        Tombstone::new(Hlc::at(clock).expect("clock"), id(origin + 10))
+                            .expect("tombstone"),
+                    ));
+                }
+                object
+            })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn merge_laws_hold_for_generated_objects(
+            left in arb_object(2),
+            middle in arb_object(3),
+            right in arb_object(4),
+        ) {
+            let left_middle = merge(&left, &middle).expect("left-middle merge");
+            let middle_left = merge(&middle, &left).expect("middle-left merge");
+            prop_assert_eq!(&left_middle, &middle_left);
+            prop_assert_eq!(merge(&left, &left).expect("idempotent merge"), left.clone());
+
+            let left_middle_right = merge(&left_middle, &right).expect("left-middle-right merge");
+            let left_middle_right_grouped = merge(
+                &left,
+                &merge(&middle, &right).expect("middle-right merge"),
+            )
+            .expect("left-(middle-right) merge");
+            prop_assert_eq!(left_middle_right, left_middle_right_grouped);
+        }
     }
 
     #[test]
@@ -268,6 +338,35 @@ mod tests {
             merge(&left, &right),
             Err(MergeError::Conflict { path: FieldPath::Field(1) })
         ));
+    }
+
+    #[test]
+    fn rejects_identity_and_type_mismatches() {
+        let left = object("left", 1, 2);
+        let mut different_id = object("right", 1, 2);
+        different_id.id = id(9);
+        assert!(matches!(merge(&left, &different_id), Err(MergeError::IdentityMismatch { .. })));
+
+        let mut profile = Object::new(id(1), ObjectType::ACCESS_PROFILE, 1).expect("profile");
+        profile
+            .insert(
+                FieldPath::field(1).expect("path"),
+                FieldEntry::new(
+                    Value::Bytes(id(5).into_bytes().to_vec()),
+                    Hlc::at(1).expect("clock"),
+                    id(2),
+                )
+                .expect("entry"),
+            )
+            .expect("insert");
+        profile
+            .insert(
+                FieldPath::field(3).expect("path"),
+                FieldEntry::new(Value::Text("user".into()), Hlc::at(2).expect("clock"), id(2))
+                    .expect("entry"),
+            )
+            .expect("insert");
+        assert!(matches!(merge(&left, &profile), Err(MergeError::TypeMismatch { .. })));
     }
 
     #[test]
