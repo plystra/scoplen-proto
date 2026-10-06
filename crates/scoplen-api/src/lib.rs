@@ -21,7 +21,9 @@ pub const ERROR_CODES: &[&str] = &[
     "policy.denied",
     "sync.client_unsupported",
     "sync.conflict",
+    "sync.cursor_ahead",
     "sync.cursor_expired",
+    "sync.object_not_found",
     "sync.read_only",
 ];
 
@@ -345,6 +347,8 @@ mod tests {
 
     #[test]
     fn unknown_codes_are_preserved_and_invalid_syntax_is_rejected() {
+        assert!(ErrorCode::new("sync.cursor_ahead").expect("registered code").is_known());
+        assert!(ErrorCode::new("sync.object_not_found").expect("registered code").is_known());
         let code = ErrorCode::new("future.new_code").expect("syntactically valid unknown code");
         assert!(!code.is_known());
         let json = serde_json::to_string(&code).expect("serialize");

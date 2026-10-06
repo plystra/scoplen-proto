@@ -18,6 +18,17 @@ and `limit`; expected values are the canonical query string. Response inputs are
 represented by JSON `null`. Response expected values are deterministic CBOR. Each response change
 entry uses integer map keys 1 through 5, as defined by `07-sync-protocol.md` §4.
 
+`sync-messages.json` contains the remaining K-4 wire vectors. Write requests are JSON arrays with
+`object_id`, nullable `base_seq`, lowercase hexadecimal `payload`, and `tombstone`; their
+expected value is a direct deterministic CBOR array of integer-keyed maps 1 through 4. Write
+responses are JSON arrays of `object_id` and `seq` assignments and encode as a direct array of
+integer-keyed maps 1 and 2. Acknowledgement requests and responses use a JSON object with
+`cursor` and encode as a text-keyed CBOR map. Snapshot responses use `objects`, `next_cursor`,
+and `more`, with the same integer-keyed entries and page rules as the change feed. Version
+responses use `versions`, contain one object id in ascending sequence order, and include at most
+the current entry plus 20 retained entries. All expected values are deterministic CBOR in lowercase
+hexadecimal.
+
 `crypto.json` contains K-2 known answers. All private keys and plaintexts in this document are
 synthetic, public test material and must never be used for real data. Every binary field is
 lowercase hexadecimal; fields in `input` are separated by `|`. Decimal integer fields and the

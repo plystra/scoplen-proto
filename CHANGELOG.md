@@ -28,3 +28,6 @@ All notable changes to `scoplen-proto` will be recorded here.
   nonce-checked XChaCha20-Poly1305 payload channel, with a published known-answer vector.
 - Added K-4 change-feed query and response codecs with canonical pagination parameters, strict
   ordering and cursor validation, failure-path coverage, and published deterministic CBOR vectors.
+- Added K-4 write-batch and assignment codecs with atomic-batch limits, acknowledgement request and
+  response codecs, objects snapshot pages, bounded versions history pages, strict failure paths,
+  published deterministic CBOR vectors, and the cursor-ahead and object-not-found error codes.
