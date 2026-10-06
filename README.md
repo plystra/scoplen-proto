@@ -17,8 +17,9 @@ XChaCha20-Poly1305, HKDF-SHA-256, Argon2id, P-256 and Ed25519 signatures, and HP
 for device and account recipients. The published K-2 known-answer set is exercised through the
 `scoplen-crypto` public API; S3 remains incomplete while pairing is unimplemented.
 The `scoplen-ssh` crate exposes K-7's ordered client algorithm policy with explicit per-Host
-legacy opt-in. It does not yet establish SSH connections; transport, authentication, channels,
-strict key exchange, and interoperability work remain open.
+legacy opt-in, role-specific transport offers, deterministic algorithm negotiation, and a strict
+key-exchange state machine. It does not yet establish SSH connections; the concrete russh
+transport, authentication, channels, SFTP, and interoperability work remain open.
 The `scoplen-api` crate exposes the K-3 error-code registry, RFC 9457 problem details, and device
 challenge, signed-device request, and token response JSON codecs, plus K-4 session, change-feed,
 write-batch, acknowledgement, snapshot, version-history, content-free notification, and account

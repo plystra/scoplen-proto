@@ -16,7 +16,10 @@ All notable changes to `scoplen-proto` will be recorded here.
 - Published executable K-2 known-answer vectors for primitives, signatures, HPKE opening, key
   wrapping, signed certificates and envelopes, recovery, Shamir, escrow, and safety numbers.
 - Added K-7 client algorithm preferences with explicit per-Host legacy selection and host
-  certificate preference; SSH transport and negotiation remain unimplemented.
+  certificate preference, role-specific transport offers, deterministic algorithm negotiation, and
+  a strict-KEX state machine with KEXINIT-first admission, KEX-family checks, sequence bounds, and
+  NEWKEYS sequence resets. The concrete SSH transport, authentication, channels, SFTP, and
+  interoperability work remain open.
 - Added the stable HTTP error-code registry and RFC 9457 problem details with JSON and deterministic
   CBOR codecs, including malformed-input tests and a published CBOR vector.
 - Extended the stable error-code registry for authenticated sync HTTP adapters with

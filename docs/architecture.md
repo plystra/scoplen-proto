@@ -16,9 +16,12 @@ validation, tombstones, and pure merge helpers. Later gates add contract behavio
 defined by `scoplen-docs/17-implementation-roadmap.md`; no consumer may define a second copy of a
 wire format or cryptographic construction.
 
-The K-7 crate currently owns the client algorithm preference lists from `10-protocol-core.md` §3.
+The K-7 crate owns the client algorithm preference lists from `10-protocol-core.md` §3.
 `HostAlgorithmPolicy::with_legacy` validates an explicit list for one Host and appends accepted
 legacy names after modern defaults. Host certificate algorithms precede raw host keys (D-42).
-The policy can select the first local preference present in a peer's offer. It is not wired to an
-SSH transport yet; a future transport must use these lists and implement strict key exchange
-before claiming the S4 transport outcome.
+`TransportOffer` turns those lists into role-specific KEXINIT offers, selects the first local
+preference present in each peer list, and enables RFC 8308 and strict-KEX markers only when both
+roles advertise them. `StrictKeyExchange` enforces the initial KEXINIT-first rule, KEX-family
+message admission, one-message limits, sequence-wrap refusal, and sequence-number reset after
+NEWKEYS. The state boundary is engine-independent; the concrete SSH transport, authentication,
+channels, SFTP, and interoperability work remain open.
