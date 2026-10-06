@@ -42,6 +42,8 @@ All notable changes to `scoplen-proto` will be recorded here.
   dispatch, and failure-path coverage.
 - Added the `agent_decoder` cargo-fuzz target and wired every current decoder target into the Linux
   CI fuzz-build job.
+- Redacted signed data and lock or unlock passphrases from `AgentMessage` debug output, with a
+  regression test for the public logging surface.
 - Added the stable HTTP error-code registry and RFC 9457 problem details with JSON and deterministic
   CBOR codecs, including malformed-input tests and a published CBOR vector.
 - Extended the stable error-code registry for authenticated sync HTTP adapters with

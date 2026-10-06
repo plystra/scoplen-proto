@@ -7,7 +7,10 @@
 
 #![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 
-use std::io::{Read, Write};
+use std::{
+    fmt,
+    io::{Read, Write},
+};
 
 use thiserror::Error;
 
@@ -102,7 +105,7 @@ impl AgentIdentity {
 }
 
 /// A decoded SSH agent request or response.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub enum AgentMessage {
     /// Request the identities currently held by the agent.
     RequestIdentities,
@@ -124,6 +127,41 @@ pub enum AgentMessage {
     Success,
     /// Return a generic failure response.
     Failure,
+}
+
+impl fmt::Debug for AgentMessage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RequestIdentities => formatter.write_str("RequestIdentities"),
+            Self::SignRequest { key_blob, data, flags } => formatter
+                .debug_struct("SignRequest")
+                .field("key_blob_len", &key_blob.len())
+                .field("data_len", &data.len())
+                .field("flags", flags)
+                .finish(),
+            Self::IdentitiesAnswer { identities } => formatter
+                .debug_struct("IdentitiesAnswer")
+                .field("identity_count", &identities.len())
+                .finish(),
+            Self::SignResponse { signature } => formatter
+                .debug_struct("SignResponse")
+                .field("signature_len", &signature.len())
+                .finish(),
+            Self::RemoveIdentity { key_blob } => formatter
+                .debug_struct("RemoveIdentity")
+                .field("key_blob_len", &key_blob.len())
+                .finish(),
+            Self::RemoveAllIdentities => formatter.write_str("RemoveAllIdentities"),
+            Self::Lock { passphrase } => {
+                formatter.debug_struct("Lock").field("passphrase_len", &passphrase.len()).finish()
+            }
+            Self::Unlock { passphrase } => {
+                formatter.debug_struct("Unlock").field("passphrase_len", &passphrase.len()).finish()
+            }
+            Self::Success => formatter.write_str("Success"),
+            Self::Failure => formatter.write_str("Failure"),
+        }
+    }
 }
 
 impl AgentMessage {
@@ -920,5 +958,24 @@ mod tests {
             Err(AgentError::FieldTooLarge("passphrase"))
         );
         assert_eq!(client.remove_identity(&[]), Err(AgentError::MalformedFrame("key blob")));
+    }
+
+    #[test]
+    fn agent_debug_redacts_signed_data_and_passphrases() {
+        let sign_debug = format!(
+            "{:?}",
+            AgentMessage::SignRequest {
+                key_blob: KEY.to_vec(),
+                data: b"private signed payload".to_vec(),
+                flags: 0,
+            }
+        );
+        assert!(!sign_debug.contains("private signed payload"));
+        assert!(sign_debug.contains("data_len"));
+
+        let lock_debug =
+            format!("{:?}", AgentMessage::Lock { passphrase: b"private passphrase".to_vec() });
+        assert!(!lock_debug.contains("private passphrase"));
+        assert!(lock_debug.contains("passphrase_len"));
     }
 }
