@@ -9,6 +9,7 @@ use scoplen_model::cbor::{self, Value};
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 
+pub mod auth;
 pub mod sync;
 
 /// Contract identifiers realized by this crate.

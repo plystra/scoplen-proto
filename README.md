@@ -19,19 +19,20 @@ for device and account recipients. The published K-2 known-answer set is exercis
 The `scoplen-ssh` crate exposes K-7's ordered client algorithm policy with explicit per-Host
 legacy opt-in. It does not yet establish SSH connections; transport, authentication, channels,
 strict key exchange, and interoperability work remain open.
-The `scoplen-api` crate exposes the K-3/K-4/K-5 error-code registry and RFC 9457 problem details
-in JSON and deterministic CBOR, plus K-4 session, change-feed, write-batch, acknowledgement,
-snapshot, version-history, and content-free notification codecs. OpenAPI resources, Cedar schema,
-gateway tickets, and protobuf contracts remain open.
+The `scoplen-api` crate exposes the K-3 error-code registry, RFC 9457 problem details, and device
+challenge, signed-device request, and token response JSON codecs, plus K-4 session, change-feed,
+write-batch, acknowledgement, snapshot, version-history, and content-free notification codecs in
+JSON and deterministic CBOR. OpenAPI resources, Cedar schema, gateway tickets, and protobuf
+contracts remain open.
 
 ## Repository shape
 
 The Cargo workspace contains `scoplen-ssh`, `scoplen-model`, `scoplen-crypto`, `scoplen-api`, and
 `scoplen-test-vectors`. K-1 vectors are in `vectors/baseline.json`; K-2 cryptographic vectors are
-in `vectors/crypto.json`. The published API problem, sync session, change-feed, and remaining
-K-4 message vectors are in `vectors/api-problem.json`, `vectors/sync-session.json`,
-`vectors/sync-changes.json`, `vectors/sync-messages.json`, and `vectors/sync-notifications.json`.
-The shared loader is usable by both workstreams.
+in `vectors/crypto.json`. The published K-3 auth and API problem, sync session, change-feed, and
+remaining K-4 message vectors are in `vectors/api-auth.json`, `vectors/api-problem.json`,
+`vectors/sync-session.json`, `vectors/sync-changes.json`, `vectors/sync-messages.json`, and
+`vectors/sync-notifications.json`. The shared loader is usable by both workstreams.
 
 ## Development
 
