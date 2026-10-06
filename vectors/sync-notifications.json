@@ -1,0 +1,24 @@
+{
+  "format": "scoplen-test-vectors",
+  "version": 1,
+  "vectors": [
+    {
+      "id": "sync-notification-vault-advanced-v1",
+      "kind": "sync.notification.vault_advanced",
+      "input": "{\"kind\":\"vault_advanced\",\"vault\":\"00000000-0000-7000-8000-000000000001\",\"seq\":7}",
+      "expected": "a26373657107657661756c745000000000000070008000000000000001"
+    },
+    {
+      "id": "sync-notification-rotation-pending-v1",
+      "kind": "sync.notification.rotation_pending",
+      "input": "{\"kind\":\"rotation_pending\",\"vault\":\"00000000-0000-7000-8000-000000000001\"}",
+      "expected": "a2657661756c74500000000000007000800000000000000170726f746174696f6e5f70656e64696e67f5"
+    },
+    {
+      "id": "sync-notification-device-revoked-v1",
+      "kind": "sync.notification.device_revoked",
+      "input": "{\"kind\":\"device_revoked\"}",
+      "expected": "a16e6465766963655f7265766f6b6564f5"
+    }
+  ]
+}

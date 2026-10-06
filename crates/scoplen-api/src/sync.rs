@@ -226,6 +226,114 @@ pub struct SyncSessionResponse {
     pub vaults: Vec<SessionVault>,
 }
 
+/// A content-free event delivered on the K-4 notification WebSocket.
+///
+/// Notifications only tell a client which follow-up action is needed. Object content is never
+/// sent on this channel; a vault advancement is followed by a change-feed pull, and a pending
+/// rotation is followed by key retrieval. The `device_revoked` marker is intentionally a boolean
+/// until the protocol specifies a device identifier or other payload for that event.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SyncNotification {
+    /// A vault has a newer change sequence.
+    VaultAdvanced { vault: Uuid, seq: u64 },
+    /// A vault needs key rotation before the next sync operation.
+    RotationPending { vault: Uuid },
+    /// The authenticated device was revoked.
+    DeviceRevoked,
+}
+
+impl SyncNotification {
+    /// Validate the event fields independent of the WebSocket session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a vault is not `UUIDv7` or an advancement sequence is zero.
+    pub fn validate(&self) -> Result<(), SyncCodecError> {
+        match self {
+            Self::VaultAdvanced { vault, seq } => {
+                valid_uuid(*vault, "notification vault")?;
+                positive(*seq, "notification sequence")
+            }
+            Self::RotationPending { vault } => valid_uuid(*vault, "notification vault"),
+            Self::DeviceRevoked => Ok(()),
+        }
+    }
+
+    /// Encode a notification as deterministic CBOR.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when event fields are invalid or deterministic CBOR encoding fails.
+    pub fn to_cbor(&self) -> Result<Vec<u8>, SyncCodecError> {
+        self.validate()?;
+        let value = match self {
+            Self::VaultAdvanced { vault, seq } => map(vec![
+                ("vault", Value::Bytes(vault.as_bytes().to_vec())),
+                ("seq", Value::UInt(*seq)),
+            ]),
+            Self::RotationPending { vault } => map(vec![
+                ("rotation_pending", Value::Bool(true)),
+                ("vault", Value::Bytes(vault.as_bytes().to_vec())),
+            ]),
+            Self::DeviceRevoked => map(vec![("device_revoked", Value::Bool(true))]),
+        };
+        cbor::encode(&value).map_err(Into::into)
+    }
+
+    /// Decode a deterministic CBOR notification, ignoring additive response fields.
+    ///
+    /// The event marker is required to be unambiguous. Known fields from a different event are
+    /// rejected, while unknown extension fields are ignored as required for response messages.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed CBOR, an unknown or ambiguous event, wrong field types, an
+    /// invalid UUID, or a zero advancement sequence.
+    pub fn from_cbor(input: &[u8]) -> Result<Self, SyncCodecError> {
+        let mut fields = decode_map(input)?;
+        let device_revoked = fields.remove("device_revoked");
+        let rotation_pending = fields.remove("rotation_pending");
+        let seq = fields.remove("seq");
+        let vault = fields.remove("vault");
+        let markers = usize::from(device_revoked.is_some())
+            + usize::from(rotation_pending.is_some())
+            + usize::from(seq.is_some());
+        if markers > 1 {
+            return Err(invalid("notification event is ambiguous"));
+        }
+        match (device_revoked, rotation_pending, seq, vault) {
+            (Some(value), None, None, None) => {
+                if !decode_bool(&value, "device_revoked")? {
+                    return Err(invalid("device_revoked must be true"));
+                }
+                Ok(Self::DeviceRevoked)
+            }
+            (None, Some(value), None, Some(vault)) => {
+                if !decode_bool(&value, "rotation_pending")? {
+                    return Err(invalid("rotation_pending must be true"));
+                }
+                Ok(Self::RotationPending { vault: decode_uuid(vault, "notification vault")? })
+            }
+            (None, None, Some(seq), Some(vault)) => Ok(Self::VaultAdvanced {
+                vault: decode_uuid(vault, "notification vault")?,
+                seq: decode_uint(&seq, "notification sequence")?,
+            }),
+            (Some(_), _, _, _) => {
+                Err(invalid("device_revoked notification has extra known fields"))
+            }
+            (None, Some(_), _, _) => {
+                Err(invalid("rotation_pending notification requires only a vault"))
+            }
+            (None, None, Some(_), _) => {
+                Err(invalid("vault advanced notification requires a vault"))
+            }
+            (None, None, None, Some(_) | None) => {
+                Err(invalid("notification is missing an event marker"))
+            }
+        }
+    }
+}
+
 impl SyncSessionResponse {
     /// Validate the response, including uniqueness of vault identifiers.
     ///
