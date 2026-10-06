@@ -34,4 +34,6 @@ agent failure response. `FramedAgentChannel` applies bounded read/write framing 
 stream, with platform constructors for Unix-domain sockets and Windows named pipes. Pageant
 compatibility and agent forwarding remain open; bounded remove-all, lock, and unlock requests are
 also dispatched with opaque failure mapping. The concrete SSH transport, remaining authentication
-methods, channels, SFTP, and interoperability work remain open.
+methods, channels, SFTP, and interoperability work remain open. The agent server can consume
+multiple bounded frames from a blocking stream through clean peer close while applying the same
+malformed and oversized-frame checks.

@@ -436,6 +436,18 @@ impl<S: AgentKeyStore> AgentServer<S> {
         response.encode_frame().or_else(|_| AgentMessage::Failure.encode_frame())
     }
 
+    /// Serve framed requests from a blocking stream until the peer closes it.
+    pub fn serve<T: Read + Write>(&self, stream: &mut T) -> Result<(), AgentError> {
+        while let Some(frame) = read_stream_frame(stream)? {
+            let response = self.dispatch_frame(&frame)?;
+            stream
+                .write_all(&response)
+                .map_err(|error| AgentError::Transport(error.to_string()))?;
+            stream.flush().map_err(|error| AgentError::Transport(error.to_string()))?;
+        }
+        Ok(())
+    }
+
     /// Return the backing key store.
     #[must_use]
     pub fn into_inner(self) -> S {
@@ -514,6 +526,33 @@ fn decode_payload(payload: &[u8]) -> Result<AgentMessage, AgentError> {
         FAILURE => Err(AgentError::MalformedFrame("failure payload")),
         other => Err(AgentError::UnsupportedMessage(other)),
     }
+}
+
+fn read_stream_frame<T: Read>(stream: &mut T) -> Result<Option<Vec<u8>>, AgentError> {
+    let mut header = [0; 4];
+    let mut received = 0;
+    while received < header.len() {
+        match stream.read(&mut header[received..]) {
+            Ok(0) if received == 0 => return Ok(None),
+            Ok(0) => return Err(AgentError::Transport("truncated SSH agent frame".into())),
+            Ok(count) => received += count,
+            Err(error) => return Err(AgentError::Transport(error.to_string())),
+        }
+    }
+    let length =
+        usize::try_from(u32::from_be_bytes(header)).map_err(|_| AgentError::FrameTooLarge)?;
+    if length == 0 {
+        return Err(AgentError::MalformedFrame("empty agent payload"));
+    }
+    if length > MAX_AGENT_FRAME {
+        return Err(AgentError::FrameTooLarge);
+    }
+    let mut frame = Vec::with_capacity(4 + length);
+    frame.extend_from_slice(&header);
+    frame.resize(4 + length, 0);
+    stream.read_exact(&mut frame[4..]).map_err(|error| AgentError::Transport(error.to_string()))?;
+    AgentMessage::decode_frame(&frame)?;
+    Ok(Some(frame))
 }
 
 fn append_string(
@@ -648,6 +687,47 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn server_serves_fragmented_requests_until_peer_closes() {
+        let store = Store {
+            identity: AgentIdentity::new(KEY, b"work key").expect("identity"),
+            signature: b"signed payload".to_vec(),
+        };
+        let identities = AgentMessage::RequestIdentities.encode_frame().expect("request");
+        let remove_all = AgentMessage::RemoveAllIdentities.encode_frame().expect("request");
+        let mut input = identities;
+        input.extend_from_slice(&remove_all);
+        let mut stream = ScriptedStream::new(input, 2);
+        AgentServer::new(store).serve(&mut stream).expect("serve");
+
+        let first_length = 4 + usize::try_from(u32::from_be_bytes(
+            stream.written[..4].try_into().expect("first header"),
+        ))
+        .expect("first response length");
+        assert_eq!(
+            AgentMessage::decode_frame(&stream.written[..first_length]).expect("identities"),
+            AgentMessage::IdentitiesAnswer {
+                identities: vec![AgentIdentity::new(KEY, b"work key").expect("identity")],
+            }
+        );
+        assert_eq!(
+            AgentMessage::decode_frame(&stream.written[first_length..]).expect("success"),
+            AgentMessage::Success
+        );
+    }
+
+    #[test]
+    fn server_rejects_oversized_stream_frame_before_allocation() {
+        let oversized = (u32::try_from(MAX_AGENT_FRAME).expect("test limit") + 1).to_be_bytes();
+        let mut stream = ScriptedStream::new(oversized.to_vec(), 4);
+        let store = Store {
+            identity: AgentIdentity::new(KEY, b"work key").expect("identity"),
+            signature: b"signed payload".to_vec(),
+        };
+        assert_eq!(AgentServer::new(store).serve(&mut stream), Err(AgentError::FrameTooLarge));
+        assert!(stream.written.is_empty());
     }
 
     #[test]
