@@ -205,6 +205,14 @@ impl Object {
         self.fields.get(&FieldPath::Field(field))
     }
 
+    /// Return the scalar field entry unless it is absent or cleared.
+    ///
+    /// A cleared optional field holds `null` with the clock of the clear
+    /// (`04-object-model.md` §4, D-57); readers treat it as absent.
+    pub fn set_field(&self, field: u64) -> Option<&FieldEntry> {
+        self.field(field).filter(|entry| !matches!(entry.value, cbor::Value::Null))
+    }
+
     /// Return all entries belonging to one field number.
     pub fn field_entries(&self, field: u64) -> impl Iterator<Item = (&FieldPath, &FieldEntry)> {
         self.fields.iter().filter(move |(path, _)| path.field_number() == field)
@@ -325,7 +333,7 @@ impl Object {
 
     /// Read a required text field from a scalar path.
     pub fn required_text(&self, field: u64) -> Result<&str, AccessError> {
-        match self.field(field).map(|entry| &entry.value) {
+        match self.set_field(field).map(|entry| &entry.value) {
             Some(cbor::Value::Text(value)) => Ok(value),
             Some(_) => Err(AccessError::WrongKind(field, "text")),
             None => Err(AccessError::Missing(field)),
@@ -334,7 +342,7 @@ impl Object {
 
     /// Read an optional text field from a scalar path.
     pub fn optional_text(&self, field: u64) -> Result<Option<&str>, AccessError> {
-        match self.field(field).map(|entry| &entry.value) {
+        match self.set_field(field).map(|entry| &entry.value) {
             Some(cbor::Value::Text(value)) => Ok(Some(value)),
             Some(_) => Err(AccessError::WrongKind(field, "text")),
             None => Ok(None),
@@ -343,7 +351,7 @@ impl Object {
 
     /// Read a required unsigned integer field.
     pub fn required_uint(&self, field: u64) -> Result<u64, AccessError> {
-        match self.field(field).map(|entry| &entry.value) {
+        match self.set_field(field).map(|entry| &entry.value) {
             Some(cbor::Value::UInt(value)) => Ok(*value),
             Some(_) => Err(AccessError::WrongKind(field, "unsigned integer")),
             None => Err(AccessError::Missing(field)),
@@ -352,7 +360,7 @@ impl Object {
 
     /// Read a required boolean field.
     pub fn required_bool(&self, field: u64) -> Result<bool, AccessError> {
-        match self.field(field).map(|entry| &entry.value) {
+        match self.set_field(field).map(|entry| &entry.value) {
             Some(cbor::Value::Bool(value)) => Ok(*value),
             Some(_) => Err(AccessError::WrongKind(field, "boolean")),
             None => Err(AccessError::Missing(field)),
@@ -361,7 +369,7 @@ impl Object {
 
     /// Read a required UUID field encoded as a 16-byte CBOR byte string.
     pub fn required_uuid(&self, field: u64) -> Result<Uuid, AccessError> {
-        match self.field(field).map(|entry| &entry.value) {
+        match self.set_field(field).map(|entry| &entry.value) {
             Some(cbor::Value::Bytes(value)) => parse_uuid_bytes(value)
                 .map_err(|_| AccessError::WrongKind(field, "UUIDv7 byte string")),
             Some(_) => Err(AccessError::WrongKind(field, "UUIDv7 byte string")),
@@ -371,7 +379,7 @@ impl Object {
 
     /// Read a required byte string field.
     pub fn required_bytes(&self, field: u64) -> Result<&[u8], AccessError> {
-        match self.field(field).map(|entry| &entry.value) {
+        match self.set_field(field).map(|entry| &entry.value) {
             Some(cbor::Value::Bytes(value)) => Ok(value),
             Some(_) => Err(AccessError::WrongKind(field, "byte string")),
             None => Err(AccessError::Missing(field)),
@@ -380,7 +388,7 @@ impl Object {
 
     /// Read a required array field.
     pub fn required_array(&self, field: u64) -> Result<&[cbor::Value], AccessError> {
-        match self.field(field).map(|entry| &entry.value) {
+        match self.set_field(field).map(|entry| &entry.value) {
             Some(cbor::Value::Array(value)) => Ok(value),
             Some(_) => Err(AccessError::WrongKind(field, "array")),
             None => Err(AccessError::Missing(field)),
@@ -389,7 +397,7 @@ impl Object {
 
     /// Read a required map field.
     pub fn required_map(&self, field: u64) -> Result<&[(cbor::Value, cbor::Value)], AccessError> {
-        match self.field(field).map(|entry| &entry.value) {
+        match self.set_field(field).map(|entry| &entry.value) {
             Some(cbor::Value::Map(value)) => Ok(value),
             Some(_) => Err(AccessError::WrongKind(field, "map")),
             None => Err(AccessError::Missing(field)),
@@ -584,6 +592,8 @@ fn validate_field_shapes(object: &Object) -> Result<(), ModelError> {
             continue;
         };
         match (path, kind) {
+            (FieldPath::Field(_), FieldKind::Scalar(_))
+                if matches!(entry.value, cbor::Value::Null) => {}
             (FieldPath::Field(_), FieldKind::Scalar(kind)) => {
                 validate_value_kind(object, path, &entry.value, kind)?;
             }
@@ -833,7 +843,7 @@ fn validate_type_fields(object: &Object) -> Result<(), ModelError> {
         ObjectType::HOST => {
             object.required_text(1).map_err(|_| invalid_field(object, "name is required"))?;
             object.required_text(2).map_err(|_| invalid_field(object, "address is required"))?;
-            if let Some(entry) = object.field(3) {
+            if let Some(entry) = object.set_field(3) {
                 if !matches!(entry.value, cbor::Value::UInt(_)) {
                     return Err(invalid_field(object, "port must be unsigned"));
                 }
@@ -863,7 +873,7 @@ fn validate_type_fields(object: &Object) -> Result<(), ModelError> {
         ObjectType::TRUST_RECORD => validate_trust_record_fields(object)?,
         ObjectType::WORKSPACE => {
             object.required_text(1).map_err(|_| invalid_field(object, "name is required"))?;
-            if let Some(entry) = object.field(2) {
+            if let Some(entry) = object.set_field(2) {
                 match &entry.value {
                     cbor::Value::Bytes(value) if value.len() <= MAX_WORKSPACE_LAYOUT_BYTES => {}
                     cbor::Value::Bytes(_) => return Err(ModelError::WorkspaceLayoutLimit),
@@ -889,26 +899,26 @@ fn validate_credential_fields(object: &Object) -> Result<(), ModelError> {
     if [3, 5, 6].contains(&kind) && binding == 1 {
         return Err(invalid_field(object, "this credential kind cannot use shared binding"));
     }
-    let has_secret = object.field(4).is_some();
+    let has_secret = object.set_field(4).is_some();
     if (binding == 1) != has_secret {
         return Err(invalid_field(object, "shared credentials require exactly one secret field"));
     }
-    if object.field(6).is_some() && ![2, 4].contains(&kind) {
+    if object.set_field(6).is_some() && ![2, 4].contains(&kind) {
         return Err(invalid_field(
             object,
             "public key is only valid for key and agent credentials",
         ));
     }
-    if object.field(7).is_some() && kind != 7 {
+    if object.set_field(7).is_some() && kind != 7 {
         return Err(invalid_field(object, "provider is only valid for external credentials"));
     }
-    if object.field(8).is_some() && kind != 3 {
+    if object.set_field(8).is_some() && kind != 3 {
         return Err(invalid_field(
             object,
             "certificate scope is only valid for certificate credentials",
         ));
     }
-    if kind == 3 && object.field(8).is_none() {
+    if kind == 3 && object.set_field(8).is_none() {
         return Err(invalid_field(object, "certificate credentials require a certificate scope"));
     }
     Ok(())
@@ -920,7 +930,7 @@ fn validate_route_fields(object: &Object) -> Result<(), ModelError> {
     if !(1..=5).contains(&kind) {
         return Err(invalid_field(object, "kind is outside the registry"));
     }
-    let field_present = |field| object.field(field).is_some();
+    let field_present = |field| object.set_field(field).is_some();
     match kind {
         1 => {
             if !field_present(3) {
@@ -972,10 +982,10 @@ fn validate_route_fields(object: &Object) -> Result<(), ModelError> {
 }
 
 fn validate_trust_record_fields(object: &Object) -> Result<(), ModelError> {
-    if object.field(1).is_none() && object.field(2).is_none() {
+    if object.set_field(1).is_none() && object.set_field(2).is_none() {
         return Err(invalid_field(object, "trust records require a host or pattern"));
     }
-    if let Some(provenance) = object.field(5) {
+    if let Some(provenance) = object.set_field(5) {
         if !matches!(provenance.value, cbor::Value::UInt(1..=4)) {
             return Err(invalid_field(object, "provenance is outside the registry"));
         }
@@ -1145,6 +1155,60 @@ mod tests {
                 FieldEntry::new(value, Hlc::at(clock).expect("clock"), id(2)).expect("entry"),
             )
             .expect("insert");
+    }
+
+    #[test]
+    fn a_cleared_optional_scalar_is_valid_and_reads_as_absent() {
+        let mut object = host();
+        put_field(&mut object, 8, cbor::Value::Bytes(id(9).as_bytes().to_vec()), 3);
+        put_field(&mut object, 8, cbor::Value::Null, 4);
+        put_field(&mut object, 7, cbor::Value::Null, 4);
+        put_field(&mut object, 3, cbor::Value::Null, 4);
+        object.validate().expect("cleared optional fields are valid");
+        assert!(object.field(8).is_some(), "the clear is kept with its clock");
+        assert!(object.set_field(8).is_none());
+        assert_eq!(object.optional_text(7), Ok(None));
+        let round_trip = Object::decode(&object.encode().expect("encode")).expect("decode");
+        assert_eq!(round_trip, object);
+    }
+
+    #[test]
+    fn a_required_field_cannot_be_cleared() {
+        let mut object = host();
+        put_field(&mut object, 1, cbor::Value::Null, 3);
+        assert!(matches!(
+            object.validate(),
+            Err(ModelError::InvalidFields { reason: "name is required", .. })
+        ));
+        assert_eq!(object.required_text(1), Err(AccessError::Missing(1)));
+    }
+
+    #[test]
+    fn cleared_fields_count_as_absent_in_type_rules() {
+        // A shared credential whose secret was cleared has no secret.
+        let mut credential = Object::new(id(1), ObjectType::CREDENTIAL, 1).expect("object");
+        put_field(&mut credential, 2, cbor::Value::UInt(1), 1);
+        put_field(&mut credential, 3, cbor::Value::UInt(1), 1);
+        put_field(&mut credential, 4, cbor::Value::Bytes(b"secret".to_vec()), 1);
+        credential.validate().expect("shared credential with a secret");
+        put_field(&mut credential, 4, cbor::Value::Null, 2);
+        assert!(credential.validate().is_err());
+        // Switching it to device binding with the secret cleared is valid.
+        put_field(&mut credential, 3, cbor::Value::UInt(2), 2);
+        credential.validate().expect("device-bound credential without a secret");
+
+        // A jump route whose cleared proxy field is ignored.
+        let mut route = Object::new(id(1), ObjectType::ROUTE, 1).expect("object");
+        put_field(&mut route, 1, cbor::Value::Text("via bastion".into()), 1);
+        put_field(&mut route, 2, cbor::Value::UInt(1), 1);
+        put_field(
+            &mut route,
+            3,
+            cbor::Value::Array(vec![cbor::Value::Bytes(id(3).as_bytes().to_vec())]),
+            1,
+        );
+        put_field(&mut route, 4, cbor::Value::Null, 2);
+        route.validate().expect("a cleared proxy does not conflict with a jump route");
     }
 
     fn put_map_entry(object: &mut Object, field: u64, key: MapKey, value: cbor::Value, clock: u64) {
