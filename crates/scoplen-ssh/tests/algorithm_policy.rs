@@ -22,14 +22,6 @@ fn defaults_match_k7_preference_order_without_legacy_algorithms() {
         (
             Category::HostKey,
             &[
-                "ssh-ed25519",
-                "ecdsa-sha2-nistp256",
-                "ecdsa-sha2-nistp384",
-                "ecdsa-sha2-nistp521",
-                "sk-ssh-ed25519@openssh.com",
-                "sk-ecdsa-sha2-nistp256@openssh.com",
-                "rsa-sha2-512",
-                "rsa-sha2-256",
                 "ssh-ed25519-cert-v01@openssh.com",
                 "ecdsa-sha2-nistp256-cert-v01@openssh.com",
                 "ecdsa-sha2-nistp384-cert-v01@openssh.com",
@@ -38,6 +30,14 @@ fn defaults_match_k7_preference_order_without_legacy_algorithms() {
                 "sk-ecdsa-sha2-nistp256-cert-v01@openssh.com",
                 "rsa-sha2-512-cert-v01@openssh.com",
                 "rsa-sha2-256-cert-v01@openssh.com",
+                "ssh-ed25519",
+                "ecdsa-sha2-nistp256",
+                "ecdsa-sha2-nistp384",
+                "ecdsa-sha2-nistp521",
+                "sk-ssh-ed25519@openssh.com",
+                "sk-ecdsa-sha2-nistp256@openssh.com",
+                "rsa-sha2-512",
+                "rsa-sha2-256",
             ][..],
         ),
         (
@@ -158,5 +158,21 @@ fn selection_uses_local_order_and_never_promotes_unknown_peer_names() {
     assert_eq!(
         enabled.select_client_preference(Category::Cipher, &["aes128-cbc"]),
         Some("aes128-cbc")
+    );
+}
+
+#[test]
+fn host_certificate_wins_when_peer_offers_certificate_and_raw_key() {
+    let policy = HostAlgorithmPolicy::default();
+    assert_eq!(
+        policy.select_client_preference(
+            Category::HostKey,
+            &["ssh-ed25519", "ssh-ed25519-cert-v01@openssh.com"]
+        ),
+        Some("ssh-ed25519-cert-v01@openssh.com")
+    );
+    assert_eq!(
+        policy.select_client_preference(Category::HostKey, &["ssh-ed25519"]),
+        Some("ssh-ed25519")
     );
 }
