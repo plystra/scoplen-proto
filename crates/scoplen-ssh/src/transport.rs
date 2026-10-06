@@ -607,8 +607,10 @@ pub enum StrictKexError {
     /// A rekey was requested before both endpoints completed the initial exchange.
     #[error("cannot begin rekey while the exchange is {phase:?}")]
     RekeyBeforeEstablished { phase: StrictKexPhase },
-    /// A second KEXINIT was seen without beginning a rekey exchange.
-    #[error("KEXINIT was received after the exchange was established without begin_rekey")]
+    /// A KEX control packet was seen after establishment without beginning a rekey exchange.
+    #[error(
+        "a KEX control packet was received after the exchange was established without begin_rekey"
+    )]
     RekeyNotStarted,
 }
 
