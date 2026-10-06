@@ -8,7 +8,7 @@ use uuid::Uuid;
 use scoplen_model::{Object, cbor, validate_uuid_v7};
 
 use crate::{
-    P256SigningKey, PrimitiveError, SymmetricKey, XChaChaNonce, p256_verify, random_nonce,
+    DeviceSigner, PrimitiveError, SymmetricKey, XChaChaNonce, p256_verify, random_nonce,
     xchacha20poly1305_open, xchacha20poly1305_seal,
 };
 
@@ -35,13 +35,13 @@ pub struct ObjectEnvelope {
 
 impl ObjectEnvelope {
     /// Encrypt and sign an object with the vault key for `key_epoch`.
-    pub fn encrypt(
+    pub fn encrypt<S: DeviceSigner + ?Sized>(
         vault_id: Uuid,
         key_epoch: u32,
         object: &Object,
         vault_key: &SymmetricKey,
         signer_device_id: Uuid,
-        signer: &P256SigningKey,
+        signer: &S,
     ) -> Result<Self, PrimitiveError> {
         if key_epoch == 0 {
             return Err(PrimitiveError::InvalidKey);
@@ -61,13 +61,13 @@ impl ObjectEnvelope {
     }
 
     /// Encrypt and sign with a supplied nonce for deterministic vectors.
-    pub fn encrypt_with_nonce(
+    pub fn encrypt_with_nonce<S: DeviceSigner + ?Sized>(
         vault_id: Uuid,
         key_epoch: u32,
         object: &Object,
         vault_key: &SymmetricKey,
         signer_device_id: Uuid,
-        signer: &P256SigningKey,
+        signer: &S,
         nonce: XChaChaNonce,
     ) -> Result<Self, PrimitiveError> {
         if key_epoch == 0 {
@@ -86,7 +86,7 @@ impl ObjectEnvelope {
             signer_device_id,
             signature: [0; 64],
         };
-        envelope.signature = signer.sign(&envelope.signature_input(&aad));
+        envelope.signature = signer.sign(&envelope.signature_input(&aad))?;
         Ok(envelope)
     }
 
@@ -188,8 +188,16 @@ fn validate_uuid(value: Uuid) -> Result<(), PrimitiveError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::SecretBytes;
+    use crate::{P256SigningKey, SecretBytes};
     use scoplen_model::{FieldEntry, FieldPath, Hlc, ObjectType, cbor};
+
+    struct FailingSigner;
+
+    impl DeviceSigner for FailingSigner {
+        fn sign(&self, _message: &[u8]) -> Result<[u8; 64], PrimitiveError> {
+            Err(PrimitiveError::InvalidSignature)
+        }
+    }
 
     fn id(seed: u8) -> Uuid {
         let mut bytes = [0; 16];
@@ -253,6 +261,23 @@ mod tests {
         assert_eq!(
             ObjectEnvelope::decode(&encoded[..encoded.len() - 1]),
             Err(PrimitiveError::InvalidEncoding)
+        );
+    }
+
+    #[test]
+    fn object_envelope_propagates_hardware_signer_failure() {
+        let key = SecretBytes::new([2; 32]);
+        assert_eq!(
+            ObjectEnvelope::encrypt_with_nonce(
+                id(3),
+                1,
+                &object(),
+                &key,
+                id(4),
+                &FailingSigner,
+                SecretBytes::new([5; 24]),
+            ),
+            Err(PrimitiveError::InvalidSignature)
         );
     }
 }

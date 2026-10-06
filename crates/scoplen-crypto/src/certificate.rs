@@ -3,11 +3,47 @@
 
 #![allow(clippy::missing_errors_doc)]
 
+use std::collections::HashSet;
+
 use uuid::Uuid;
 
 use scoplen_model::{cbor, validate_uuid_v7};
 
 use crate::{Ed25519SigningKey, PrimitiveError, ed25519_verify};
+
+/// Verify a signed device list and return active certificates in UUID order.
+///
+/// Revocations for devices that are not present in `certificates` are retained by the caller's
+/// server-side list but do not prevent validating the certificates that are present.
+pub fn verify_device_list(
+    certificates: &[DeviceCertificate],
+    revocations: &[RevocationStatement],
+    account_signing_public_key: &[u8; 32],
+) -> Result<Vec<DeviceCertificate>, PrimitiveError> {
+    let mut certificate_ids = HashSet::with_capacity(certificates.len());
+    for certificate in certificates {
+        certificate.verify(account_signing_public_key)?;
+        if !certificate_ids.insert(certificate.device_id) {
+            return Err(PrimitiveError::InvalidEncoding);
+        }
+    }
+
+    let mut revoked_ids = HashSet::with_capacity(revocations.len());
+    for revocation in revocations {
+        revocation.verify(account_signing_public_key)?;
+        if !revoked_ids.insert(revocation.device_id) {
+            return Err(PrimitiveError::InvalidEncoding);
+        }
+    }
+
+    let mut active: Vec<_> = certificates
+        .iter()
+        .filter(|certificate| !revoked_ids.contains(&certificate.device_id))
+        .cloned()
+        .collect();
+    active.sort_by_key(|certificate| *certificate.device_id.as_bytes());
+    Ok(active)
+}
 
 /// A signed device certificate from the account signing key.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -309,6 +345,28 @@ mod tests {
         let decoded =
             RevocationStatement::decode(&revocation.encode().expect("encode")).expect("decode");
         decoded.verify(&account.public_key()).expect("verify");
+        assert_eq!(
+            verify_device_list(&[certificate.clone()], &[], &account.public_key())
+                .expect("active list"),
+            vec![certificate.clone()]
+        );
+        assert!(
+            verify_device_list(
+                &[certificate.clone()],
+                &[revocation.clone()],
+                &account.public_key()
+            )
+            .expect("revoked list")
+            .is_empty()
+        );
+        assert_eq!(
+            verify_device_list(
+                &[certificate.clone(), certificate.clone()],
+                &[],
+                &account.public_key()
+            ),
+            Err(PrimitiveError::InvalidEncoding)
+        );
         assert_eq!(
             DeviceCertificate::decode(&encoded[..encoded.len() - 1]),
             Err(PrimitiveError::InvalidEncoding)

@@ -20,6 +20,17 @@ pub struct P256SigningKey {
     secret: SecretBytes<32>,
 }
 
+/// Fallible signing interface implemented by software and hardware-held device keys.
+pub trait DeviceSigner {
+    /// Sign a message as fixed-width P-256 `r || s` bytes.
+    ///
+    /// # Errors
+    ///
+    /// Hardware-backed implementations return an error when the platform keystore cannot perform
+    /// the operation. The software implementation only returns success after signing locally.
+    fn sign(&self, message: &[u8]) -> Result<[u8; 64], PrimitiveError>;
+}
+
 impl P256SigningKey {
     /// Parse a SEC1 private scalar from exactly 32 bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, PrimitiveError> {
@@ -52,6 +63,12 @@ impl P256SigningKey {
 impl fmt::Debug for P256SigningKey {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("P256SigningKey([REDACTED])")
+    }
+}
+
+impl DeviceSigner for P256SigningKey {
+    fn sign(&self, message: &[u8]) -> Result<[u8; 64], PrimitiveError> {
+        Ok(P256SigningKey::sign(self, message))
     }
 }
 

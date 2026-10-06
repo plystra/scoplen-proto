@@ -15,7 +15,7 @@ mod secret;
 mod shamir;
 mod signature;
 
-pub use certificate::{DeviceCertificate, RevocationStatement};
+pub use certificate::{DeviceCertificate, RevocationStatement, verify_device_list};
 pub use envelope::ObjectEnvelope;
 pub use hpke::{
     AccountKemKeyPair, DeviceKemKeyPair, HpkeCiphertext, hpke_open_account, hpke_open_device,
@@ -36,7 +36,7 @@ pub use recovery::{RecoveryBlob, RecoveryKey};
 pub use secret::{SecretBytes, SecretVec, SymmetricKey, XChaChaNonce};
 pub use shamir::{ShamirShare, combine_shamir, split_shamir, split_shamir_with_randomness};
 pub use signature::{
-    Ed25519SigningKey, P256SigningKey, ed25519_verify, generate_ed25519_signing_key,
+    DeviceSigner, Ed25519SigningKey, P256SigningKey, ed25519_verify, generate_ed25519_signing_key,
     generate_p256_signing_key, p256_verify,
 };
 
