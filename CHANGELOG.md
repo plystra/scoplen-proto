@@ -18,8 +18,11 @@ All notable changes to `scoplen-proto` will be recorded here.
 - Added K-7 client algorithm preferences with explicit per-Host legacy selection and host
   certificate preference, role-specific transport offers, deterministic algorithm negotiation, and
   a strict-KEX state machine with KEXINIT-first admission, KEX-family checks, sequence bounds, and
-  NEWKEYS sequence resets. The concrete SSH transport, authentication, channels, SFTP, and
-  interoperability work remain open.
+  NEWKEYS sequence resets.
+- Added the engine-independent K-7 publickey boundary for Ed25519 and P-256 signers, RFC 4252
+  session-bound probes and signed requests, bounded OpenSSH user and host certificate validation,
+  and host-key trust callbacks. The concrete SSH transport, remaining authentication methods,
+  channels, SFTP, and interoperability work remain open.
 - Added the stable HTTP error-code registry and RFC 9457 problem details with JSON and deterministic
   CBOR codecs, including malformed-input tests and a published CBOR vector.
 - Extended the stable error-code registry for authenticated sync HTTP adapters with

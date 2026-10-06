@@ -23,5 +23,8 @@ legacy names after modern defaults. Host certificate algorithms precede raw host
 preference present in each peer list, and enables RFC 8308 and strict-KEX markers only when both
 roles advertise them. `StrictKeyExchange` enforces the initial KEXINIT-first rule, KEX-family
 message admission, one-message limits, sequence-wrap refusal, and sequence-number reset after
-NEWKEYS. The state boundary is engine-independent; the concrete SSH transport, authentication,
-channels, SFTP, and interoperability work remain open.
+NEWKEYS. The engine-independent authentication boundary supplies Ed25519 and P-256 `Signer`
+adapters, RFC 4252 publickey probes and signed requests, bounded OpenSSH certificate parsing and
+validation, and a host-key trust callback that is called only after validation. The concrete SSH
+transport, remaining authentication methods, channels, SFTP, and interoperability work remain
+open.

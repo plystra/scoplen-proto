@@ -26,8 +26,9 @@ after its contract is specified in `scoplen-docs` and covered by vectors and fai
   merge laws, and known-answer vectors. S3 has its primitives, key hierarchy, device certificates,
   encrypted envelopes, recovery, Shamir, escrow wrapping, and vectors for the implemented
   constructions. CPace/QR pairing and its vectors remain open. S4 has a per-Host algorithm policy,
-  role-specific transport negotiation, and strict-KEX state validation, while concrete transport,
-  authentication, channels, and interoperability remain open. S6 has the error contract, K-3 device-auth
+  role-specific transport negotiation, strict-KEX state validation, and an engine-independent
+  publickey boundary with Ed25519/P-256 signers and OpenSSH certificate checks; concrete transport,
+  remaining authentication methods, channels, and interoperability remain open. S6 has the error contract, K-3 device-auth
   JSON codecs, and K-4 session and sync codecs, while the remaining wire contracts remain open.
   S5 and S7 have no completed gate evidence.
 - Independent security review and interoperability evidence are required before a Stable release.
