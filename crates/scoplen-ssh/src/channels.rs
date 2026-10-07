@@ -1054,7 +1054,7 @@ pub struct GlobalRequestFailure;
 
 impl GlobalRequestFailure {
     /// Encode an empty global request failure.
-    pub fn encode() -> Result<Vec<u8>, ChannelCodecError> {
+    pub fn encode(&self) -> Result<Vec<u8>, ChannelCodecError> {
         Ok(vec![SSH_MSG_REQUEST_FAILURE])
     }
 
@@ -1456,7 +1456,7 @@ mod tests {
             let wire = response.encode().expect("success wire");
             assert_eq!(GlobalRequestSuccess::decode(&wire).expect("success decode"), response);
         }
-        let failure = GlobalRequestFailure::encode().expect("failure wire");
+        let failure = GlobalRequestFailure.encode().expect("failure wire");
         assert_eq!(GlobalRequestFailure::decode(&failure), Ok(GlobalRequestFailure));
     }
 
