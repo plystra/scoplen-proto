@@ -9,10 +9,12 @@ use scoplen_crypto::{
     HpkeCiphertext, LocalDatabaseKeyEnvelope, ObjectEnvelope, P256SigningKey, PairingCode,
     PairingContext, PairingInitiator, PairingQrPayload, PairingResponder, PairingRole,
     PrimitiveError, RecoveryBlob, RecoveryKey, RevocationStatement, SecretBytes, ShamirShare,
-    XChaChaNonce, combine_shamir, ed25519_verify, hkdf_sha256, hpke_open_account, hpke_open_device,
+    XChaChaNonce, combine_shamir, ed25519_verify, escrow_account_context, escrow_device_context,
+    escrow_verification_code, hkdf_sha256, hpke_open_account, hpke_open_device,
     open_escrow_share_from_account, open_escrow_share_from_device, p256_verify, safety_fingerprint,
     safety_number, safety_qr, split_shamir_with_randomness, unwrap_key_from_device,
-    verify_safety_qr, xchacha20poly1305_open, xchacha20poly1305_seal,
+    verify_escrow_verification_code, verify_safety_qr, xchacha20poly1305_open,
+    xchacha20poly1305_seal,
 };
 use scoplen_model::Object;
 use scoplen_test_vectors::VectorDocument;
@@ -396,33 +398,116 @@ fn fixture(kind: &str, input: &str, expected: &str) {
             assert_eq!(decoded.open(b"wrong"), Err(PrimitiveError::Authentication));
         }
         "crypto.escrow-account-open" => {
-            let f = fields(input, 3);
+            let f = fields(input, 5);
+            let account_id = uuid(f[0]);
+            let administrator_id = uuid(f[1]);
             let recipient =
-                AccountKemKeyPair::from_private_bytes(&unhex(f[0])).expect("account key");
-            let wrapped = HpkeCiphertext { encapsulated_key: unhex(f[1]), ciphertext: unhex(f[2]) };
+                AccountKemKeyPair::from_private_bytes(&unhex(f[2])).expect("account key");
+            let wrapped = HpkeCiphertext { encapsulated_key: unhex(f[3]), ciphertext: unhex(f[4]) };
             assert_eq!(
-                hex(open_escrow_share_from_account(&recipient, &wrapped).expect("open").to_bytes()),
+                hex(open_escrow_share_from_account(
+                    account_id,
+                    administrator_id,
+                    &recipient,
+                    &wrapped
+                )
+                .expect("open")
+                .to_bytes()),
                 expected
             );
             let mut tampered = wrapped.clone();
             tampered.ciphertext[0] ^= 1;
             assert_eq!(
-                open_escrow_share_from_account(&recipient, &tampered),
+                open_escrow_share_from_account(account_id, administrator_id, &recipient, &tampered),
+                Err(PrimitiveError::Authentication)
+            );
+            assert_eq!(
+                open_escrow_share_from_account(
+                    account_id,
+                    Uuid::from_bytes([0; 16]),
+                    &recipient,
+                    &wrapped,
+                ),
                 Err(PrimitiveError::Authentication)
             );
         }
         "crypto.escrow-device-open" => {
-            let f = fields(input, 3);
-            let recipient = DeviceKemKeyPair::from_private_bytes(&unhex(f[0])).expect("device key");
-            let wrapped = HpkeCiphertext { encapsulated_key: unhex(f[1]), ciphertext: unhex(f[2]) };
+            let f = fields(input, 6);
+            let account_id = uuid(f[0]);
+            let request_id = uuid(f[1]);
+            let device_signing = unhex(f[2]);
+            let recipient = DeviceKemKeyPair::from_private_bytes(&unhex(f[3])).expect("device key");
+            let wrapped = HpkeCiphertext { encapsulated_key: unhex(f[4]), ciphertext: unhex(f[5]) };
             assert_eq!(
-                hex(open_escrow_share_from_device(&recipient, &wrapped).expect("open").to_bytes()),
+                hex(open_escrow_share_from_device(
+                    account_id,
+                    request_id,
+                    &device_signing,
+                    &recipient,
+                    &wrapped,
+                )
+                .expect("open")
+                .to_bytes()),
                 expected
             );
             let mut tampered = wrapped.clone();
             tampered.ciphertext[0] ^= 1;
             assert_eq!(
-                open_escrow_share_from_device(&recipient, &tampered),
+                open_escrow_share_from_device(
+                    account_id,
+                    request_id,
+                    &device_signing,
+                    &recipient,
+                    &tampered,
+                ),
+                Err(PrimitiveError::Authentication)
+            );
+            assert_eq!(
+                open_escrow_share_from_device(
+                    account_id,
+                    Uuid::from_bytes([0; 16]),
+                    &device_signing,
+                    &recipient,
+                    &wrapped,
+                ),
+                Err(PrimitiveError::Authentication)
+            );
+        }
+        "crypto.escrow-verification" => {
+            let f = fields(input, 5);
+            let e = fields(expected, 3);
+            let account_id = uuid(f[0]);
+            let administrator_id = uuid(f[1]);
+            let request_id = uuid(f[2]);
+            let device_signing = unhex(f[3]);
+            let device_kem = unhex(f[4]);
+            assert_eq!(
+                escrow_verification_code(account_id, request_id, &device_signing, &device_kem)
+                    .expect("verification code"),
+                e[0]
+            );
+            assert_eq!(hex(escrow_account_context(account_id, administrator_id)), e[1]);
+            assert_eq!(
+                hex(escrow_device_context(account_id, request_id, &device_signing, &device_kem,)
+                    .expect("device context")),
+                e[2]
+            );
+            verify_escrow_verification_code(
+                account_id,
+                request_id,
+                &device_signing,
+                &device_kem,
+                e[0],
+            )
+            .expect("verification code checks");
+            assert_eq!(
+                verify_escrow_verification_code(
+                    account_id,
+                    request_id,
+                    &device_signing,
+                    &device_kem,
+                    "0000-0000-0000-0000",
+                ),
                 Err(PrimitiveError::Authentication)
             );
         }
@@ -512,6 +597,7 @@ fn published_crypto_known_answers() {
                 "crypto.local-db-key",
                 "crypto.escrow-account-open",
                 "crypto.escrow-device-open",
+                "crypto.escrow-verification",
                 "crypto.qr-pairing",
                 "crypto.cpace-pairing",
             ]

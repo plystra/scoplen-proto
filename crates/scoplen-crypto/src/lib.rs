@@ -25,8 +25,9 @@ pub use cpace::{
 };
 pub use envelope::ObjectEnvelope;
 pub use escrow::{
+    escrow_account_context, escrow_device_context, escrow_verification_code,
     open_escrow_share_from_account, open_escrow_share_from_device, rewrap_escrow_share_to_device,
-    wrap_escrow_share_to_account,
+    verify_escrow_verification_code, wrap_escrow_share_to_account,
 };
 pub use hpke::{
     AccountKemKeyPair, DeviceKemKeyPair, HpkeCiphertext, hpke_open_account, hpke_open_device,
