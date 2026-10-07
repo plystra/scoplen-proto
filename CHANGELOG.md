@@ -4,6 +4,10 @@ All notable changes to `scoplen-proto` will be recorded here.
 
 ## Unreleased
 
+- Added the bounded K-6 gateway client-hello codec: a four-byte big-endian length followed by a
+  deterministic CBOR map containing compact-JWS `ticket` and `dpop_proof` values. The codec rejects
+  malformed or non-canonical maps, unknown fields, invalid JWS shapes, truncation, trailing bytes,
+  and oversized unauthenticated frames, with published known-answer vectors.
 - Added the Rust workspace baseline and shared known-answer vector loader (roadmap S1).
 - Added the deterministic K-1 object model: strict CBOR, UUIDv7/HLC clocks, typed envelopes,
   tombstones, limits, merge algebra, and orphan detection (roadmap S2).

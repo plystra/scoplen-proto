@@ -10,6 +10,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 
 pub mod auth;
+pub mod gateway;
 pub mod sync;
 
 /// Contract identifiers realized by this crate.
