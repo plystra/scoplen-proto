@@ -71,3 +71,5 @@ All notable changes to `scoplen-proto` will be recorded here.
 - Added K-4 account key-bundle GET and PUT codecs with opaque artifact limits, sorted device wraps
   and certificate lists, signed canonical-CBOR input helpers, replay revision validation, failure
   paths, and published deterministic CBOR vectors.
+- Accepted `null` in optional scalar fields as a clear that merges by its clock and reads as absent
+  (D-57), with a published merge vector; required fields still reject `null`.
