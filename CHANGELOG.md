@@ -68,6 +68,8 @@ All notable changes to `scoplen-proto` will be recorded here.
   request correlation.
 - Added the OpenSSH `limits@openssh.com` SFTP extension request and response codec with bounded
   extension payloads and malformed-length rejection.
+- Added bounded SFTP client request builders for open, read, write, close, and limits requests;
+  invalid requests release their reserved ids instead of consuming pipeline capacity.
 - Added the stable HTTP error-code registry and RFC 9457 problem details with JSON and deterministic
   CBOR codecs, including malformed-input tests and a published CBOR vector.
 - Extended the stable error-code registry for authenticated sync HTTP adapters with

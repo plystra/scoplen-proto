@@ -604,6 +604,46 @@ impl SftpClient {
         Err(SftpError::OutstandingLimit)
     }
 
+    /// Queue an OPEN request with a tracked request id.
+    pub fn open(
+        &mut self,
+        path: impl Into<Vec<u8>>,
+        pflags: u32,
+        attrs: SftpAttributes,
+    ) -> Result<SftpPacket, SftpError> {
+        self.queue(|id| SftpPacket::Open { id, path: path.into(), pflags, attrs })
+    }
+
+    /// Queue a READ request with a tracked request id.
+    pub fn read(
+        &mut self,
+        handle: impl Into<Vec<u8>>,
+        offset: u64,
+        length: u32,
+    ) -> Result<SftpPacket, SftpError> {
+        self.queue(|id| SftpPacket::Read { id, handle: handle.into(), offset, length })
+    }
+
+    /// Queue a WRITE request with a tracked request id.
+    pub fn write(
+        &mut self,
+        handle: impl Into<Vec<u8>>,
+        offset: u64,
+        data: impl Into<Vec<u8>>,
+    ) -> Result<SftpPacket, SftpError> {
+        self.queue(|id| SftpPacket::Write { id, handle: handle.into(), offset, data: data.into() })
+    }
+
+    /// Queue a CLOSE request with a tracked request id.
+    pub fn close(&mut self, handle: impl Into<Vec<u8>>) -> Result<SftpPacket, SftpError> {
+        self.queue(|id| SftpPacket::Close { id, handle: handle.into() })
+    }
+
+    /// Queue an OpenSSH limits extension request with a tracked request id.
+    pub fn request_limits(&mut self) -> Result<SftpPacket, SftpError> {
+        self.queue(SftpPacket::limits_request)
+    }
+
     /// Accept a response and release its request id.
     pub fn accept_response(&mut self, packet: &SftpPacket) -> Result<(), SftpError> {
         let Some(id) = packet.request_id() else {
@@ -616,6 +656,19 @@ impl SftpClient {
     #[must_use]
     pub fn pending_requests(&self) -> usize {
         self.pending.len()
+    }
+
+    fn queue<F>(&mut self, build: F) -> Result<SftpPacket, SftpError>
+    where
+        F: FnOnce(u32) -> SftpPacket,
+    {
+        let id = self.reserve_request_id()?;
+        let packet = build(id);
+        if let Err(error) = packet.encode() {
+            self.pending.remove(&id);
+            return Err(error);
+        }
+        Ok(packet)
     }
 }
 
@@ -985,5 +1038,22 @@ mod tests {
                 .encode(),
             Err(SftpError::FieldTooLarge("extension response"))
         );
+    }
+
+    #[test]
+    fn client_builders_track_valid_requests_and_release_invalid_ids() {
+        let mut client = SftpClient::new(5).unwrap();
+        client.accept_version(&SftpPacket::Version { version: 3, extensions: Vec::new() }).unwrap();
+        let open = client.open(b"/tmp/a", 1, SftpAttributes::default()).unwrap();
+        let read = client.read(b"h", 0, 4096).unwrap();
+        let write = client.write(b"h", 4096, b"payload").unwrap();
+        let limits = client.request_limits().unwrap();
+        assert_eq!(open.request_id(), Some(1));
+        assert_eq!(read.request_id(), Some(2));
+        assert_eq!(write.request_id(), Some(3));
+        assert_eq!(limits.request_id(), Some(4));
+        assert_eq!(client.pending_requests(), 4);
+        assert_eq!(client.read(Vec::new(), 0, 1), Err(SftpError::InvalidValue("handle")));
+        assert_eq!(client.pending_requests(), 4);
     }
 }
