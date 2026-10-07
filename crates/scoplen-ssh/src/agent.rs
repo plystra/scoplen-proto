@@ -12,6 +12,7 @@ use std::{
     io::{Read, Write},
 };
 
+use crate::channels::{ChannelData, MAX_CHANNEL_STRING};
 use scoplen_crypto::SecretVec;
 use thiserror::Error;
 
@@ -61,6 +62,10 @@ pub const MAX_AGENT_EXTENSION_NAME: usize = 4096;
 pub const MAX_AGENT_EXTENSION_DETAILS: usize = 64 * 1024;
 /// Maximum opaque request or response contents accepted by an agent extension.
 pub const MAX_AGENT_EXTENSION_DATA: usize = 192 * 1024;
+/// Maximum bytes retained while an SSH `auth-agent` channel data stream is reassembled.
+pub const MAX_AGENT_FORWARD_BUFFER: usize = MAX_AGENT_FRAME + 4;
+/// Maximum complete agent responses produced for one channel-data delivery.
+pub const MAX_AGENT_FORWARD_RESPONSES: usize = 64;
 /// OpenSSH requests an RSA SHA-256 signature when this flag is set.
 pub const AGENT_SIGN_FLAG_RSA_SHA2_256: u32 = 2;
 /// OpenSSH requests an RSA SHA-512 signature when this flag is set.
@@ -93,6 +98,18 @@ pub enum AgentError {
     /// The backing key store failed while serving an agent request.
     #[error("SSH agent key store failed: {0}")]
     KeyStore(String),
+    /// The forwarded agent channel retained more bytes than its bounded reassembly buffer.
+    #[error("SSH forwarded agent buffer is too large")]
+    ForwardingBufferTooLarge,
+    /// One channel-data delivery contained more complete agent requests than allowed.
+    #[error("SSH forwarded agent response limit exceeded")]
+    ForwardingResponseLimit,
+    /// The forwarded agent channel closed while a frame was still being reassembled.
+    #[error("SSH forwarded agent channel closed with a truncated frame")]
+    ForwardingTruncated,
+    /// Data arrived after the forwarded agent channel had been closed.
+    #[error("SSH forwarded agent channel is closed")]
+    ForwardingClosed,
 }
 
 /// Opaque, zeroizing SSH private-key data for an add-identity request.
@@ -844,12 +861,20 @@ impl<S: AgentKeyStore> AgentServer<S> {
         request: AgentMessage,
         policy: &AgentForwardingPolicy<A>,
     ) -> AgentMessage {
-        if let AgentMessage::SignRequest { ref key_blob, ref data, flags } = request {
-            if policy.authorize_signature(key_blob, data, flags).is_err() {
-                return AgentMessage::Failure;
+        match request {
+            AgentMessage::RequestIdentities => self.dispatch(AgentMessage::RequestIdentities),
+            AgentMessage::SignRequest { key_blob, data, flags } => {
+                if policy.authorize_signature(&key_blob, &data, flags).is_err() {
+                    AgentMessage::Failure
+                } else {
+                    self.dispatch(AgentMessage::SignRequest { key_blob, data, flags })
+                }
             }
+            // Management requests and extensions must never cross an SSH auth-agent channel.
+            // The caller receives the normal opaque agent failure response, so the remote peer
+            // cannot distinguish an unsupported operation from a policy or store refusal.
+            _ => AgentMessage::Failure,
         }
-        self.dispatch(request)
     }
 
     /// Decode, dispatch, and encode one complete request frame.
@@ -894,6 +919,167 @@ impl<S: AgentKeyStore> AgentServer<S> {
             stream.flush().map_err(|error| AgentError::Transport(error.to_string()))?;
         }
         Ok(())
+    }
+}
+
+/// Incremental adapter for the byte stream carried by an SSH `auth-agent@openssh.com` channel.
+///
+/// SSH channel-data packets may split an agent frame at any byte and may carry more than one
+/// frame. This adapter reassembles those frames into the bounded agent protocol, dispatches only
+/// request-identities and authorized sign requests, and splits each response back into channel
+/// data-sized fragments. The adapter owns its server and forwarding policy so a channel cannot
+/// accidentally outlive the policy that protects forwarded signatures.
+pub struct AgentForwardingAdapter<S, A> {
+    server: AgentServer<S>,
+    policy: AgentForwardingPolicy<A>,
+    response_channel: u32,
+    buffer: Vec<u8>,
+    closed: bool,
+}
+
+impl<S: AgentKeyStore, A: AgentForwardingAuthorizer> AgentForwardingAdapter<S, A> {
+    /// Construct an adapter whose response channel-data uses `response_channel` as its recipient.
+    #[must_use]
+    pub fn new(
+        server: AgentServer<S>,
+        policy: AgentForwardingPolicy<A>,
+        response_channel: u32,
+    ) -> Self {
+        Self {
+            server,
+            policy,
+            response_channel,
+            buffer: Vec::with_capacity(MAX_AGENT_FORWARD_BUFFER.min(4096)),
+            closed: false,
+        }
+    }
+
+    /// Feed one channel-data payload and return zero or more response fragments.
+    ///
+    /// Each returned [`ChannelData`] contains at most [`MAX_CHANNEL_STRING`] bytes. A malformed
+    /// frame, an oversized frame, or a response-count violation closes the adapter and returns an
+    /// error; callers should then close the SSH channel.
+    pub fn push(&mut self, data: &[u8]) -> Result<Vec<ChannelData>, AgentError> {
+        if self.closed {
+            return Err(AgentError::ForwardingClosed);
+        }
+
+        let mut input = data;
+        let mut responses = Vec::new();
+        let mut response_count = 0usize;
+
+        loop {
+            let expected = if self.buffer.len() >= 4 {
+                let length = usize::try_from(u32::from_be_bytes(
+                    self.buffer[..4]
+                        .try_into()
+                        .map_err(|_| AgentError::MalformedFrame("agent frame length"))?,
+                ))
+                .map_err(|_| AgentError::FrameTooLarge)?;
+                if length == 0 {
+                    self.closed = true;
+                    return Err(AgentError::MalformedFrame("empty agent payload"));
+                }
+                if length > MAX_AGENT_FRAME {
+                    self.closed = true;
+                    return Err(AgentError::FrameTooLarge);
+                }
+                4usize.checked_add(length).ok_or_else(|| {
+                    self.closed = true;
+                    AgentError::ForwardingBufferTooLarge
+                })?
+            } else {
+                0
+            };
+
+            if expected != 0 && self.buffer.len() == expected {
+                if response_count == MAX_AGENT_FORWARD_RESPONSES {
+                    self.closed = true;
+                    return Err(AgentError::ForwardingResponseLimit);
+                }
+                let frame = std::mem::take(&mut self.buffer);
+                let request = match AgentMessage::decode_frame(&frame) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        self.closed = true;
+                        return Err(error);
+                    }
+                };
+                let response = self.server.dispatch_forwarded(request, &self.policy);
+                let response =
+                    response.encode_frame().or_else(|_| AgentMessage::Failure.encode_frame())?;
+                responses.extend(response.chunks(MAX_CHANNEL_STRING).map(|fragment| ChannelData {
+                    recipient_channel: self.response_channel,
+                    data: fragment.to_vec(),
+                }));
+                response_count += 1;
+                continue;
+            }
+
+            if input.is_empty() {
+                break;
+            }
+
+            let target = if self.buffer.len() < 4 { 4 } else { expected };
+            let remaining = target.checked_sub(self.buffer.len()).ok_or_else(|| {
+                self.closed = true;
+                AgentError::ForwardingBufferTooLarge
+            })?;
+            let take = remaining.min(input.len());
+            if self.buffer.len().checked_add(take).ok_or_else(|| {
+                self.closed = true;
+                AgentError::ForwardingBufferTooLarge
+            })? > MAX_AGENT_FORWARD_BUFFER
+            {
+                self.closed = true;
+                return Err(AgentError::ForwardingBufferTooLarge);
+            }
+            self.buffer.extend_from_slice(&input[..take]);
+            input = &input[take..];
+        }
+
+        Ok(responses)
+    }
+
+    /// Feed a decoded channel-data message and return response fragments for its peer channel.
+    pub fn push_channel_data(
+        &mut self,
+        message: &ChannelData,
+    ) -> Result<Vec<ChannelData>, AgentError> {
+        if message.data.len() > MAX_CHANNEL_STRING {
+            return Err(AgentError::FieldTooLarge("channel data"));
+        }
+        self.push(&message.data)
+    }
+
+    /// Close the channel after the peer has sent EOF or closed it.
+    ///
+    /// A close with no buffered bytes is clean. Any buffered header or payload is a truncated
+    /// agent frame and is reported distinctly so callers can record a protocol failure.
+    pub fn finish(&mut self) -> Result<(), AgentError> {
+        if self.closed {
+            return Err(AgentError::ForwardingClosed);
+        }
+        self.closed = true;
+        if self.buffer.is_empty() { Ok(()) } else { Err(AgentError::ForwardingTruncated) }
+    }
+
+    /// Return whether this adapter has been closed after EOF or a protocol error.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.closed
+    }
+
+    /// Return the number of bytes currently held for an incomplete agent frame.
+    #[must_use]
+    pub fn buffered_len(&self) -> usize {
+        self.buffer.len()
+    }
+
+    /// Return the owned server and forwarding policy after the channel is no longer used.
+    #[must_use]
+    pub fn into_parts(self) -> (AgentServer<S>, AgentForwardingPolicy<A>) {
+        (self.server, self.policy)
     }
 }
 
@@ -1485,6 +1671,39 @@ mod tests {
         AgentPrivateKey::new(encoded).expect("private key")
     }
 
+    fn forwarding_adapter(signature: Vec<u8>) -> AgentForwardingAdapter<Store, Authorizer> {
+        AgentForwardingAdapter::new(
+            AgentServer::new(Store {
+                identity: AgentIdentity::new(KEY, b"work key").expect("identity"),
+                signature,
+            }),
+            AgentForwardingPolicy::enabled(Authorizer { allowed: true }),
+            9,
+        )
+    }
+
+    fn decode_agent_frames(fragments: &[ChannelData]) -> Vec<AgentMessage> {
+        let mut wire = Vec::new();
+        for fragment in fragments {
+            assert_eq!(fragment.recipient_channel, 9);
+            assert!(fragment.data.len() <= MAX_CHANNEL_STRING);
+            wire.extend_from_slice(&fragment.data);
+        }
+
+        let mut frames = Vec::new();
+        let mut offset = 0;
+        while offset < wire.len() {
+            let length = usize::try_from(u32::from_be_bytes(
+                wire[offset..offset + 4].try_into().expect("response header"),
+            ))
+            .expect("response length");
+            let end = offset + 4 + length;
+            frames.push(AgentMessage::decode_frame(&wire[offset..end]).expect("response frame"));
+            offset = end;
+        }
+        frames
+    }
+
     #[test]
     fn server_serves_fragmented_requests_until_peer_closes() {
         let store = Store {
@@ -1705,6 +1924,127 @@ mod tests {
             AgentMessage::decode_frame(&stream.written).expect("response"),
             AgentMessage::SignResponse { signature: b"signed payload".to_vec() }
         );
+    }
+
+    #[test]
+    fn forwarding_adapter_reassembles_fragmented_and_multiple_frames() {
+        let mut adapter = forwarding_adapter(b"signed payload".to_vec());
+        let mut wire = AgentMessage::RequestIdentities.encode_frame().expect("identities");
+        wire.extend_from_slice(
+            &AgentMessage::SignRequest {
+                key_blob: KEY.to_vec(),
+                data: b"payload".to_vec(),
+                flags: AGENT_SIGN_FLAG_RSA_SHA2_512,
+            }
+            .encode_frame()
+            .expect("sign"),
+        );
+
+        let mut responses = Vec::new();
+        for byte in wire {
+            responses.extend(adapter.push(&[byte]).expect("fragment"));
+        }
+        assert_eq!(
+            decode_agent_frames(&responses),
+            vec![
+                AgentMessage::IdentitiesAnswer {
+                    identities: vec![AgentIdentity::new(KEY, b"work key").expect("identity")],
+                },
+                AgentMessage::SignResponse { signature: b"signed payload".to_vec() },
+            ]
+        );
+        assert_eq!(adapter.buffered_len(), 0);
+        adapter.finish().expect("clean close");
+    }
+
+    #[test]
+    fn forwarding_adapter_splits_large_responses_into_channel_data_fragments() {
+        let mut adapter = forwarding_adapter(vec![b's'; MAX_CHANNEL_STRING]);
+        let request = AgentMessage::SignRequest {
+            key_blob: KEY.to_vec(),
+            data: b"payload".to_vec(),
+            flags: 0,
+        }
+        .encode_frame()
+        .expect("sign");
+        let responses = adapter.push(&request).expect("response");
+        assert_eq!(responses.len(), 2);
+        assert!(responses.iter().all(|fragment| fragment.data.len() <= MAX_CHANNEL_STRING));
+        assert_eq!(
+            decode_agent_frames(&responses),
+            vec![AgentMessage::SignResponse { signature: vec![b's'; MAX_CHANNEL_STRING] }]
+        );
+    }
+
+    #[test]
+    fn forwarding_adapter_rejects_management_and_extension_requests() {
+        let private_key = ed25519_private_key();
+        let requests = [
+            AgentMessage::AddIdentity {
+                private_key: private_key.clone(),
+                comment: b"added key".to_vec(),
+            },
+            AgentMessage::AddIdentityConstrained {
+                private_key,
+                comment: b"added key".to_vec(),
+                constraints: vec![AgentConstraint::Confirm],
+            },
+            AgentMessage::RemoveIdentity { key_blob: KEY.to_vec() },
+            AgentMessage::RemoveAllIdentities,
+            AgentMessage::AddSmartcardKey {
+                provider: b"provider".to_vec(),
+                pin: SecretVec::new(b"pin".to_vec()),
+                flags: 0,
+            },
+            AgentMessage::RemoveSmartcardKey { provider: b"provider".to_vec(), flags: 0 },
+            AgentMessage::Lock { passphrase: b"passphrase".to_vec() },
+            AgentMessage::Unlock { passphrase: b"passphrase".to_vec() },
+            AgentMessage::ExtensionRequest {
+                name: b"query".to_vec(),
+                contents: b"supported".to_vec(),
+            },
+        ];
+        let mut adapter = forwarding_adapter(b"signature".to_vec());
+        for request in requests {
+            let frame = request.encode_frame().expect("request");
+            assert_eq!(
+                decode_agent_frames(&adapter.push(&frame).expect("failure response")),
+                [AgentMessage::Failure]
+            );
+        }
+        adapter.finish().expect("clean close");
+    }
+
+    #[test]
+    fn forwarding_adapter_distinguishes_clean_close_and_truncation() {
+        let mut clean = forwarding_adapter(b"signature".to_vec());
+        assert_eq!(clean.finish(), Ok(()));
+        assert!(clean.is_closed());
+        assert_eq!(clean.push(&[]), Err(AgentError::ForwardingClosed));
+
+        let frame = AgentMessage::RequestIdentities.encode_frame().expect("request");
+        let mut truncated = forwarding_adapter(b"signature".to_vec());
+        truncated.push(&frame[..frame.len() - 1]).expect("partial frame");
+        assert_eq!(truncated.buffered_len(), frame.len() - 1);
+        assert_eq!(truncated.finish(), Err(AgentError::ForwardingTruncated));
+        assert!(truncated.is_closed());
+    }
+
+    #[test]
+    fn forwarding_adapter_bounds_frames_and_response_count() {
+        let oversized = (u32::try_from(MAX_AGENT_FRAME).expect("limit") + 1).to_be_bytes();
+        let mut oversized_adapter = forwarding_adapter(b"signature".to_vec());
+        assert_eq!(oversized_adapter.push(&oversized), Err(AgentError::FrameTooLarge));
+        assert!(oversized_adapter.is_closed());
+
+        let request = AgentMessage::RequestIdentities.encode_frame().expect("request");
+        let mut many = Vec::new();
+        for _ in 0..=MAX_AGENT_FORWARD_RESPONSES {
+            many.extend_from_slice(&request);
+        }
+        let mut limited = forwarding_adapter(b"signature".to_vec());
+        assert_eq!(limited.push(&many), Err(AgentError::ForwardingResponseLimit));
+        assert!(limited.is_closed());
     }
 
     #[test]
