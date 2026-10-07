@@ -34,6 +34,8 @@ All notable changes to `scoplen-proto` will be recorded here.
 - Added the bounded blocking agent stream channel with fragmented-read handling and platform
   constructors for Unix-domain sockets and Windows named pipes, including pre-write request
   validation and oversized-response tests. Pageant compatibility and forwarding remain open.
+- Added a bounded Pageant named-pipe agent adapter on Windows, reusing the standard agent framing
+  and covering fragmented responses, malformed frames, and oversized responses.
 - Added bounded agent management requests for removing all identities and locking or unlocking
   an agent, with opaque failure mapping and passphrase limits.
 - Added bounded smart-card provider load and removal requests with PIN redaction, flag preservation,

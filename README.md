@@ -20,13 +20,14 @@ The `scoplen-ssh` crate exposes K-7's ordered algorithm policy, role-specific of
 exchange state, and engine-independent authentication boundaries. Software Ed25519, P-256, and
 RSA/SHA-2 signers, FIDO2 security-key hooks, RFC 4252 `none`, password and keyboard-interactive
 codecs, certificate validation, and host-verification callbacks are available. Agent support
-includes bounded Unix-socket and Windows named-pipe streams, identity and signing requests,
-add/remove/lock/smart-card management, opaque extensions, and fail-closed forwarding policy.
+includes bounded Unix-socket and Windows named-pipe streams, Pageant named-pipe compatibility,
+identity and signing requests, add/remove/lock/smart-card management, opaque extensions, and
+fail-closed forwarding policy.
 Bounded RFC 4254 channel codecs cover session and forwarding requests. A bounded SFTP v3 packet
 boundary covers negotiation, core file requests and responses, and request correlation, with
 binary-safe handles and extension data. These are protocol boundaries; concrete russh connection
-and channel engines, Pageant, SSH `auth-agent` channel integration, full SFTP operations and
-extensions, dynamic SOCKS listeners, and interoperability work remain open.
+and channel engines, legacy Pageant WM_COPYDATA discovery, SSH `auth-agent` channel integration,
+full SFTP operations and extensions, dynamic SOCKS listeners, and interoperability work remain open.
 The `scoplen-api` crate exposes the K-3 error-code registry, RFC 9457 problem details, and device
 challenge, signed-device request, and token response JSON codecs, plus K-4 session, change-feed,
 write-batch, acknowledgement, snapshot, version-history, content-free notification, and account

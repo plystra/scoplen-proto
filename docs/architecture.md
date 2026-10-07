@@ -34,8 +34,9 @@ and server dispatch that maps key-store errors to opaque failures. `FramedAgentC
 bounded read/write framing over a blocking stream, with platform constructors for Unix-domain
 sockets and Windows named pipes. The forwarded-agent adapter reassembles fragmented and multi-frame
 channel data, applies the fail-closed per-profile authorizer, and bounds response count and
-channel-data fragments. Pageant compatibility and SSH `auth-agent` channel integration remain
-open. The concrete SSH transport, channel engine, and interoperability work remain open.
+channel-data fragments. Pageant named-pipe compatibility is available on Windows through the same
+bounded framing; legacy WM_COPYDATA discovery and SSH `auth-agent` channel integration remain open.
+The concrete SSH transport, channel engine, and interoperability work remain open.
 The agent server can consume
 multiple bounded frames from a blocking stream through clean peer close while applying the same
 malformed and oversized-frame checks.
