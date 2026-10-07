@@ -15,6 +15,7 @@ mod agent;
 mod authentication;
 mod channels;
 mod policy;
+mod proxy;
 mod russh_adapter;
 mod security_key;
 mod sftp;
@@ -60,6 +61,10 @@ pub use channels::{
     MAX_CHANNEL_STRING, MAX_CHANNEL_TEXT, MAX_PTY_MODES, PtyRequest, Signal, WindowChangeRequest,
 };
 pub use policy::{AlgorithmCategory, AlgorithmPolicyError, HostAlgorithmPolicy};
+pub use proxy::{
+    HttpConnectTransport, MAX_HTTP_CONNECT_RESPONSE, MAX_PROXY_HOST, ProxyError, ProxyOperation,
+    ProxyProtocol, ProxyTransportError, Socks5Transport,
+};
 pub use russh_adapter::{
     ChannelEvent, ClientChannel, ClientConfig, ClientConnection, ClientError, HostKeyPolicy,
     PublicKeyAuthError,

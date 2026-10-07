@@ -75,6 +75,9 @@ pub enum TransportError {
     /// An established transport operation failed.
     #[error("TCP {operation:?} failed: {kind:?}")]
     Io { operation: TransportOperation, kind: io::ErrorKind },
+    /// A composed proxy transport failed during its handshake.
+    #[error("proxy handshake failed: {error}")]
+    Proxy { error: crate::proxy::ProxyError, kind: io::ErrorKind },
 }
 
 impl TransportError {
@@ -91,7 +94,8 @@ impl TransportError {
             Self::Resolution { kind }
             | Self::Connect { kind, .. }
             | Self::Configure { kind, .. }
-            | Self::Io { kind, .. } => *kind,
+            | Self::Io { kind, .. }
+            | Self::Proxy { kind, .. } => *kind,
             Self::NoAddresses => io::ErrorKind::NotFound,
             Self::ConnectTimeout { .. } => io::ErrorKind::TimedOut,
         }
