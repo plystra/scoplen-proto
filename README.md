@@ -15,7 +15,8 @@ cryptographic, and wire behavior is added only from the canonical specifications
 the S3 primitive boundary now includes zeroizing secret containers, operating-system randomness,
 XChaCha20-Poly1305, HKDF-SHA-256, Argon2id, P-256 and Ed25519 signatures, and HPKE key wrapping
 for device and account recipients. The published K-2 known-answer set is exercised through the
-`scoplen-crypto` public API; S3 remains incomplete while pairing is unimplemented.
+`scoplen-crypto` public API, including account/request-bound escrow share contexts and the
+administrator recovery verification code. S3 remains incomplete while pairing is unimplemented.
 The `scoplen-ssh` crate exposes K-7's ordered algorithm policy, role-specific offers, strict key
 exchange state, and engine-independent authentication boundaries. Software Ed25519, P-256, and
 RSA/SHA-2 signers, FIDO2 security-key hooks, RFC 4252 `none`, password and keyboard-interactive

@@ -64,7 +64,9 @@ recovery display and safety-number outputs are written as text.
 | `crypto.shamir-split` | secret, threshold, share count, coefficient bytes | serialized shares, separated by `|` |
 | `crypto.safety-number` | account UUID, Ed25519 public key, and X25519 KEM public key for each account | sixty decimal digits, both 32-byte fingerprints, and canonical `splsafety2:` QR text |
 | `crypto.local-db-key` | UTF-8 passphrase, database key, Argon2 memory KiB, time cost, parallelism, salt, nonce | encoded Argon2id wrapper |
-| `crypto.escrow-account-open`, `crypto.escrow-device-open` | recipient private key, encapsulated key, ciphertext | serialized authenticated Shamir share |
+| `crypto.escrow-account-open` | account UUID, administrator UUID, recipient private key, encapsulated key, ciphertext | serialized authenticated Shamir share |
+| `crypto.escrow-device-open` | account UUID, request UUID, device signing public key, recipient private key, encapsulated key, ciphertext | serialized authenticated Shamir share |
+| `crypto.escrow-verification` | account UUID, administrator UUID, request UUID, device signing and KEM public keys | grouped 80-bit verification code and account/device contexts |
 | `crypto.qr-pairing` | pairing UUIDv7, P-256 KEM public key, P-256 signing public key | canonical `splpair1:` QR text |
 | `crypto.cpace-pairing` | pairing UUIDv7, initiator and responder UUIDv7, code, initiator and responder RNG bytes, nonce, plaintext | initiator share, responder share, 64-byte CPace session id, both confirmations, and nonce-prefixed XChaCha frame |
 
