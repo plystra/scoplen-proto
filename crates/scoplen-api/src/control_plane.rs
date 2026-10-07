@@ -136,7 +136,10 @@ mod tests {
         BUILT_IN_POLICIES, CEDAR_SCHEMA, GATEWAY_CONTROL_PROTO, HOST_AGENT_PROTO, ListQuery, Page,
         ProblemDetails, QueryError, Resource,
     };
+    use crate::{INTERNAL_PROTO_DESCRIPTOR, proto};
     use cedar_policy::{PolicySet, Schema, ValidationMode, Validator};
+    use prost::Message;
+    use prost_types::FileDescriptorSet;
     use serde_json::json;
     use std::str::FromStr;
 
@@ -253,6 +256,43 @@ mod tests {
             "Agent",
             &["Enroll", "Heartbeat", "Subscribe", "RequestHostCertificate", "ReportConfiguration"],
         );
+    }
+
+    #[test]
+    fn generated_internal_bindings_round_trip_and_descriptor_is_published() {
+        let request = proto::spl::gateway::v1::RegisterRequest {
+            gateway_id: "018f35d4-1f8f-7e2a-9e56-7a5e8a9f11a1".into(),
+            network_id: "018f35d4-1f8f-7e2a-9e56-7a5e8a9f11a2".into(),
+            join_token: vec![1, 2, 3],
+            certificate_signing_request: vec![4, 5],
+            version: "0.1.0".into(),
+            load: Some(proto::spl::gateway::v1::Load {
+                active_sessions: 1,
+                pending_sessions: 2,
+                cpu_millis: 3,
+                bytes_in: 4,
+                bytes_out: 5,
+            }),
+        };
+        let mut encoded = Vec::new();
+        request.encode(&mut encoded).expect("encode generated message");
+        assert_eq!(
+            proto::spl::gateway::v1::RegisterRequest::decode(encoded.as_slice())
+                .expect("decode generated message"),
+            request
+        );
+        assert!(proto::spl::gateway::v1::RegisterRequest::decode([0x0a, 0x80].as_slice()).is_err());
+
+        let descriptor =
+            FileDescriptorSet::decode(INTERNAL_PROTO_DESCRIPTOR).expect("published descriptor set");
+        let services = descriptor
+            .file
+            .iter()
+            .flat_map(|file| file.service.iter())
+            .filter_map(|service| service.name.as_deref())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(services.contains("Control"));
+        assert!(services.contains("Agent"));
     }
 
     #[test]

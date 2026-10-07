@@ -4,6 +4,9 @@ All notable changes to `scoplen-proto` will be recorded here.
 
 ## Unreleased
 
+- Added reproducible Prost-generated Rust bindings and a published `FileDescriptorSet` for the
+  internal gateway and host-agent protobuf contracts, with generated-message and descriptor
+  validation tests. TypeScript bindings and runtime gRPC services remain open.
 - Added the bounded K-6 gateway client-hello codec: a four-byte big-endian length followed by a
   deterministic CBOR map containing compact-JWS `ticket` and `dpop_proof` values. The codec rejects
   malformed or non-canonical maps, unknown fields, invalid JWS shapes, truncation, trailing bytes,

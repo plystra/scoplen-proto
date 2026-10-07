@@ -9,6 +9,6 @@ All opaque byte fields and repeated collections carry the documented maximum in
 the field comment. Runtime implementations must enforce those limits before
 allocation and must authenticate the mTLS peer before accepting a request.
 
-Generated Rust and TypeScript bindings, descriptor publishing, and concrete
-tonic service implementations remain separate work after the source contract
-is reviewed.
+The API crate generates Rust message bindings with the pinned Prost toolchain and exposes the
+compiled `FileDescriptorSet` for internal consumers. TypeScript bindings and concrete tonic service
+implementations remain separate work after the source contract is reviewed.

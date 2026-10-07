@@ -12,7 +12,30 @@ use thiserror::Error;
 pub mod auth;
 pub mod control_plane;
 pub mod gateway;
+/// Generated Rust bindings for internal gateway and host-agent protobuf contracts.
+#[allow(clippy::doc_markdown, clippy::must_use_candidate)]
+pub mod proto {
+    /// Generated `spl.agent.v1` contract.
+    pub mod spl {
+        pub mod agent {
+            pub mod v1 {
+                include!(concat!(env!("OUT_DIR"), "/spl.agent.v1.rs"));
+            }
+        }
+
+        /// Generated `spl.gateway.v1` contract.
+        pub mod gateway {
+            pub mod v1 {
+                include!(concat!(env!("OUT_DIR"), "/spl.gateway.v1.rs"));
+            }
+        }
+    }
+}
 pub mod sync;
+
+/// `FileDescriptorSet` for the internal protobuf contracts.
+pub const INTERNAL_PROTO_DESCRIPTOR: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/scoplen-internal-descriptor.bin"));
 
 /// Contract identifiers realized by this crate.
 pub const CONTRACTS: &[&str] = &["K-3", "K-4", "K-5", "K-6"];
