@@ -24,17 +24,19 @@ certificates, and host-key verification callbacks that run only after certificat
 Security-key requests validate resident-key identities, applications, authenticator flags, counters,
 and bounded OpenSSH signature encodings. It does not yet establish SSH connections; the concrete
 russh transport, platform agent channels, agent forwarding, remaining authentication methods,
-channels, SFTP, and interoperability work remain open. The agent boundary already provides
-bounded request-identities and sign request/response codecs, a transport-neutral client, and
+concrete channel transport, SFTP, and interoperability work remain open. The agent boundary
+already provides bounded request-identities and sign request/response codecs, a transport-neutral client, and
 server dispatch with opaque failure mapping. A bounded blocking stream adapter is available with
 Unix-domain socket and Windows named-pipe constructors; Pageant and agent forwarding remain open.
 The client and server boundary also supports bounded remove-all, smart-card load and removal, lock,
 and unlock management requests with opaque failure mapping; add-identity, Pageant, and forwarding
+remain open. The public API also exposes bounded RFC 4254 channel-open, data, lifecycle,
+session-request, and forwarding codecs; concrete engine transport and dynamic SOCKS listeners
 remain open.
 The server boundary can serve multiple bounded frames from a blocking stream until clean peer
 close and rejects oversized input before allocation.
 Exact-key remove-identity requests are also supported with bounded public-key blobs; add-identity,
-smart-card operations, Pageant, and forwarding remain open.
+Pageant, and forwarding remain open.
 The forwarding boundary now fails closed by default and can require an authorizer for every
 forwarded signature before dispatch; the SSH `auth-agent` channel integration remains open.
 RFC 4252 `none`, `password` (including change), and keyboard-interactive request, prompt, and

@@ -34,7 +34,7 @@ agent failure response. `FramedAgentChannel` applies bounded read/write framing 
 stream, with platform constructors for Unix-domain sockets and Windows named pipes. Pageant
 compatibility and agent forwarding remain open; bounded remove-all, smart-card load and removal,
 lock, and unlock requests are also dispatched with opaque failure mapping. The concrete SSH
-transport, remaining authentication methods, channels, SFTP, and interoperability work remain open.
+transport, remaining authentication methods, channel engine, SFTP, and interoperability work remain open.
 The agent server can consume
 multiple bounded frames from a blocking stream through clean peer close while applying the same
 malformed and oversized-frame checks.
@@ -46,6 +46,11 @@ payloads and lock credentials are not emitted through ordinary diagnostics.
 Forwarded agent serving uses an explicit per-profile policy that is disabled by default and invokes
 an authorizer for each signature before the key store; the SSH `auth-agent` channel integration is
 still open.
+The channel boundary exposes bounded RFC 4254 channel-open, data, lifecycle, session-request, and
+global forwarding codecs, including direct and forwarded TCP, Unix streamlocal, and agent-forwarding
+channel types. It validates exact message consumption, field limits, request names, booleans, signal
+names, and forwarding failure reasons; the concrete engine, dynamic SOCKS listeners, and connection
+composition remain separate outcomes.
 The authentication boundary also encodes `none`, `password` and password-change, and
 keyboard-interactive exchanges with bounded context, prompt, and response fields; password and
 interactive response bytes are held in zeroizing secret containers. Concrete engine integration

@@ -38,6 +38,9 @@ All notable changes to `scoplen-proto` will be recorded here.
   an agent, with opaque failure mapping and passphrase limits.
 - Added bounded smart-card provider load and removal requests with PIN redaction, flag preservation,
   opaque failure mapping, and client/server store hooks.
+- Added bounded RFC 4254 channel-open, channel-data, lifecycle, session-request, agent-forwarding,
+  direct/forwarded TCP and streamlocal, and global forwarding codecs with strict field limits and
+  malformed-input tests.
 - Added bounded blocking agent-server serving that validates fragmented request frames, dispatches
   multiple requests until clean peer close, and refuses oversized input before allocation.
 - Added exact-key remove-identity requests with bounded public-key blobs, client helpers, server

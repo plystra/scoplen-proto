@@ -12,6 +12,7 @@ pub const CONTRACT: &str = "K-7";
 
 mod agent;
 mod authentication;
+mod channels;
 mod policy;
 mod security_key;
 mod transport;
@@ -33,6 +34,14 @@ pub use authentication::{
     KeyboardInteractiveResponse, NoneAuthRequest, P256SshSigner, PasswordAuthRequest,
     PublicKeyAuthContext, PublicKeyAuthRequest, PublicKeyIdentity, SignatureAlgorithm, Signer,
     SignerError, SshCertificate, UserAuthContext, UserCertificate, verify_host_key,
+};
+pub use channels::{
+    ChannelClose, ChannelCodecError, ChannelData, ChannelEof, ChannelExtendedData, ChannelFailure,
+    ChannelOpen, ChannelOpenConfirmation, ChannelOpenFailure, ChannelOpenFailureReason,
+    ChannelOpenType, ChannelRequest, ChannelRequestType, ChannelSuccess, ChannelWindowAdjust,
+    ExitSignalRequest, ExtendedDataType, GlobalRequest, GlobalRequestFailure, GlobalRequestSuccess,
+    GlobalRequestType, MAX_CHANNEL_ADDRESS, MAX_CHANNEL_MESSAGE, MAX_CHANNEL_NAME,
+    MAX_CHANNEL_STRING, MAX_CHANNEL_TEXT, MAX_PTY_MODES, PtyRequest, Signal, WindowChangeRequest,
 };
 pub use policy::{AlgorithmCategory, AlgorithmPolicyError, HostAlgorithmPolicy};
 pub use security_key::{
