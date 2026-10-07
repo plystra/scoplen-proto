@@ -24,8 +24,9 @@ includes bounded Unix-socket and Windows named-pipe streams, Pageant named-pipe 
 identity and signing requests, add/remove/lock/smart-card management, opaque extensions, and
 fail-closed forwarding policy.
 Bounded RFC 4254 channel codecs cover session and forwarding requests. A bounded SFTP v3 packet
-boundary covers negotiation, core file requests and responses, bounded request correlation, and the
-OpenSSH `limits@openssh.com` extension, with binary-safe handles and extension data. These are protocol boundaries; concrete russh connection
+boundary covers negotiation, core file and directory/path requests and responses, bounded request
+correlation, and the OpenSSH `limits@openssh.com` extension, with binary-safe handles and extension
+data. These are protocol boundaries; concrete russh connection
 and channel engines, legacy Pageant WM_COPYDATA discovery, SSH `auth-agent` channel integration,
 full SFTP operations and extensions, dynamic SOCKS listeners, and interoperability work remain open.
 The `scoplen-api` crate exposes the K-3 error-code registry, RFC 9457 problem details, and device

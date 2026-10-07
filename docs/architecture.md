@@ -58,7 +58,9 @@ keyboard-interactive exchanges with bounded context, prompt, and response fields
 interactive response bytes are held in zeroizing secret containers. `RsaSshSigner` accepts only RSA
 private keys and binds the selected `rsa-sha2-256` or `rsa-sha2-512` hash to the signature wrapper;
 raw `ssh-rsa` SHA-1 authentication is rejected. The SFTP boundary provides bounded v3 negotiation,
-core open/read/write/close/stat packets, binary-safe handles and extension data, attributes and
-status responses, request-id correlation for bounded pipelining, and the OpenSSH
-`limits@openssh.com` request and response; full SFTP operations, the remaining OpenSSH extensions,
-resume/progress, and engine integration remain open.
+core open/read/write/close/stat packets, directory and path operations (opendir, readdir, remove,
+mkdir, rmdir, and realpath), binary-safe handles and extension data, attributes, status, and
+directory-entry responses, request-id correlation for bounded pipelining, and the OpenSSH
+`limits@openssh.com`
+request and response; full SFTP operations, the remaining OpenSSH extensions, resume/progress, and
+engine integration remain open.
