@@ -34,9 +34,11 @@ and server dispatch that maps key-store errors to opaque failures. `FramedAgentC
 bounded read/write framing over a blocking stream, with platform constructors for Unix-domain
 sockets and Windows named pipes. The forwarded-agent adapter reassembles fragmented and multi-frame
 channel data, applies the fail-closed per-profile authorizer, and bounds response count and
-channel-data fragments. Pageant named-pipe compatibility is available on Windows through the same
-bounded framing; legacy WM_COPYDATA discovery and SSH `auth-agent` channel integration remain open.
-The concrete SSH transport, channel engine, and interoperability work remain open.
+channel-data fragments. `AuthAgentChannel` composes that adapter with the bounded RFC 4254
+`auth-agent@openssh.com` open, data, EOF, and close lifecycle; it validates channel numbers and
+peer packet limits and reports clean versus truncated close outcomes. Pageant named-pipe
+compatibility is available on Windows through the same bounded framing; legacy WM_COPYDATA discovery
+remains open. The concrete SSH transport, channel engine, and interoperability work remain open.
 The agent server can consume
 multiple bounded frames from a blocking stream through clean peer close while applying the same
 malformed and oversized-frame checks.
@@ -47,7 +49,8 @@ Agent message debug output reports only bounded lengths and non-sensitive metada
 payloads and lock credentials are not emitted through ordinary diagnostics.
 Forwarded agent serving uses an explicit per-profile policy that is disabled by default and invokes
 an authorizer for each signature before the key store; management and extension requests are
-rejected on a forwarded channel. The SSH `auth-agent` channel integration remains open.
+rejected on a forwarded channel. The `AuthAgentChannel` boundary keeps that policy in force while
+leaving channel allocation, window updates, and engine scheduling to the concrete SSH engine.
 The channel boundary exposes bounded RFC 4254 channel-open, data, lifecycle, session-request, and
 global forwarding codecs, including direct and forwarded TCP, Unix streamlocal, and agent-forwarding
 channel types. It validates exact message consumption, field limits, request names, booleans, signal

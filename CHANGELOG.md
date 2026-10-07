@@ -58,6 +58,10 @@ All notable changes to `scoplen-proto` will be recorded here.
 - Added a bounded forwarded-agent channel adapter that reassembles fragmented and multi-frame
   channel data, splits responses at the channel limit, rejects management and extension requests,
   and distinguishes clean close from truncation.
+- Added the engine-independent `AuthAgentChannel` boundary for `auth-agent@openssh.com`: bounded
+  open confirmation and packet limits, channel-number validation, policy-protected request
+  dispatch, response fragmentation, and typed clean or truncated close outcomes. Concrete SSH
+  engine scheduling and interoperability remain open.
 - Added bounded RFC 4252 `none`, `password` and password-change, and keyboard-interactive request,
   prompt, and response codecs; password and response bytes use zeroizing secret storage and
   malformed, NUL, truncation, and size failure paths are covered.
