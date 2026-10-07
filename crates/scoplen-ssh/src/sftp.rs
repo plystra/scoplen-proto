@@ -24,6 +24,9 @@ const FXP_STATUS: u8 = 101;
 const FXP_HANDLE: u8 = 102;
 const FXP_DATA: u8 = 103;
 const FXP_ATTRS: u8 = 105;
+const FXP_EXTENDED: u8 = 200;
+const FXP_EXTENDED_REPLY: u8 = 201;
+const LIMITS_EXTENSION: &[u8] = b"limits@openssh.com";
 
 const ATTR_SIZE: u32 = 0x0000_0001;
 const ATTR_UIDGID: u32 = 0x0000_0002;
@@ -43,6 +46,8 @@ pub const MAX_SFTP_HANDLE: usize = 256;
 pub const MAX_SFTP_EXTENSIONS: usize = 64;
 /// Maximum number of outstanding requests tracked by one client.
 pub const MAX_SFTP_OUTSTANDING: usize = 1024;
+/// Maximum extension-specific payload accepted by one EXTENDED packet.
+pub const MAX_SFTP_EXTENSION_DATA: usize = MAX_SFTP_PACKET - 64;
 
 /// Errors produced by the SFTP framing and client boundary.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -111,6 +116,51 @@ pub struct SftpAttributes {
     pub modify_time: Option<u32>,
     /// Extension pairs carried by the peer.
     pub extended: Vec<SftpExtension>,
+}
+
+/// Limits advertised by OpenSSH's `limits@openssh.com` extension.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SftpLimits {
+    /// Maximum complete packet accepted by the server.
+    pub max_packet_length: u64,
+    /// Maximum bytes returned by one read request.
+    pub max_read_length: u64,
+    /// Maximum bytes accepted by one write request.
+    pub max_write_length: u64,
+    /// Maximum number of simultaneously open handles.
+    pub max_open_handles: u64,
+}
+
+impl SftpLimits {
+    /// Encode the extension-specific limits response body.
+    #[must_use]
+    pub fn encode(self) -> Vec<u8> {
+        let mut output = Vec::with_capacity(32);
+        output.extend_from_slice(&self.max_packet_length.to_be_bytes());
+        output.extend_from_slice(&self.max_read_length.to_be_bytes());
+        output.extend_from_slice(&self.max_write_length.to_be_bytes());
+        output.extend_from_slice(&self.max_open_handles.to_be_bytes());
+        output
+    }
+
+    /// Decode exactly one limits response body.
+    pub fn decode(input: &[u8]) -> Result<Self, SftpError> {
+        if input.len() != 32 {
+            return Err(SftpError::Malformed("limits response"));
+        }
+        let value = |offset: usize| -> Result<u64, SftpError> {
+            let bytes = input[offset..offset + 8]
+                .try_into()
+                .map_err(|_| SftpError::Malformed("limits response"))?;
+            Ok(u64::from_be_bytes(bytes))
+        };
+        Ok(Self {
+            max_packet_length: value(0)?,
+            max_read_length: value(8)?,
+            max_write_length: value(16)?,
+            max_open_handles: value(24)?,
+        })
+    }
 }
 
 impl SftpAttributes {
@@ -237,10 +287,15 @@ pub enum SftpPacket {
     Data { id: u32, data: Vec<u8> },
     /// Return attributes.
     Attrs { id: u32, attrs: SftpAttributes },
+    /// Send an extension-specific request body.
+    Extended { id: u32, name: Vec<u8>, data: Vec<u8> },
+    /// Return an extension-specific response body.
+    ExtendedReply { id: u32, data: Vec<u8> },
 }
 
 impl SftpPacket {
     /// Encode one complete length-prefixed SFTP packet.
+    #[allow(clippy::too_many_lines)]
     pub fn encode(&self) -> Result<Vec<u8>, SftpError> {
         let mut encoder = Encoder::new();
         match self {
@@ -331,11 +386,26 @@ impl SftpPacket {
                 encoder.u32(*id);
                 attrs.encode_into(&mut encoder)?;
             }
+            Self::Extended { id, name, data } => {
+                validate_string(name, "extension name", false)?;
+                validate_opaque(data, MAX_SFTP_EXTENSION_DATA, "extension data", true)?;
+                encoder.u8(FXP_EXTENDED);
+                encoder.u32(*id);
+                encoder.string(name, MAX_SFTP_STRING, "extension name")?;
+                encoder.raw(data);
+            }
+            Self::ExtendedReply { id, data } => {
+                validate_opaque(data, MAX_SFTP_EXTENSION_DATA, "extension response", true)?;
+                encoder.u8(FXP_EXTENDED_REPLY);
+                encoder.u32(*id);
+                encoder.raw(data);
+            }
         }
         encoder.finish()
     }
 
     /// Decode exactly one complete length-prefixed SFTP packet.
+    #[allow(clippy::too_many_lines)]
     pub fn decode(input: &[u8]) -> Result<Self, SftpError> {
         if input.len() < 5 {
             return Err(SftpError::Malformed("truncated packet"));
@@ -427,6 +497,15 @@ impl SftpPacket {
                 id: reader.u32("request id")?,
                 attrs: SftpAttributes::decode_from(&mut reader)?,
             },
+            FXP_EXTENDED => Self::Extended {
+                id: reader.u32("request id")?,
+                name: reader.bytes(MAX_SFTP_STRING, "extension name", false)?,
+                data: reader.rest(MAX_SFTP_EXTENSION_DATA, "extension data")?,
+            },
+            FXP_EXTENDED_REPLY => Self::ExtendedReply {
+                id: reader.u32("request id")?,
+                data: reader.rest(MAX_SFTP_EXTENSION_DATA, "extension response")?,
+            },
             other => return Err(SftpError::UnsupportedPacket(other)),
         };
         reader.finish()?;
@@ -448,7 +527,23 @@ impl SftpPacket {
             | Self::Status { id, .. }
             | Self::Handle { id, .. }
             | Self::Data { id, .. }
-            | Self::Attrs { id, .. } => Some(*id),
+            | Self::Attrs { id, .. }
+            | Self::Extended { id, .. }
+            | Self::ExtendedReply { id, .. } => Some(*id),
+        }
+    }
+
+    /// Construct an OpenSSH `limits@openssh.com` request.
+    #[must_use]
+    pub fn limits_request(id: u32) -> Self {
+        Self::Extended { id, name: LIMITS_EXTENSION.to_vec(), data: Vec::new() }
+    }
+
+    /// Decode an OpenSSH `limits@openssh.com` response.
+    pub fn limits_response(&self) -> Result<SftpLimits, SftpError> {
+        match self {
+            Self::ExtendedReply { data, .. } => SftpLimits::decode(data),
+            _ => Err(SftpError::Malformed("expected limits response")),
         }
     }
 }
@@ -587,6 +682,10 @@ impl Encoder {
         self.body.extend_from_slice(&value.to_be_bytes());
     }
 
+    fn raw(&mut self, value: &[u8]) {
+        self.body.extend_from_slice(value);
+    }
+
     fn string(&mut self, value: &[u8], limit: usize, field: &'static str) -> Result<(), SftpError> {
         if value.len() > limit || value.len() > u32::MAX as usize {
             return Err(SftpError::FieldTooLarge(field));
@@ -689,6 +788,13 @@ impl<'a> Reader<'a> {
             return Err(SftpError::InvalidValue(field));
         }
         Ok(bytes)
+    }
+
+    fn rest(&mut self, limit: usize, field: &'static str) -> Result<Vec<u8>, SftpError> {
+        if self.remaining() > limit {
+            return Err(SftpError::FieldTooLarge(field));
+        }
+        self.take(self.remaining(), field).map(ToOwned::to_owned)
     }
 
     fn finish(&self) -> Result<(), SftpError> {
@@ -850,6 +956,34 @@ mod tests {
         assert_eq!(
             SftpPacket::Close { id: 2, handle: Vec::new() }.encode(),
             Err(SftpError::InvalidValue("handle"))
+        );
+    }
+
+    #[test]
+    fn limits_extension_round_trips_and_rejects_wrong_lengths() {
+        let request = SftpPacket::limits_request(12);
+        assert_eq!(
+            SftpPacket::decode(&request.encode().unwrap()),
+            Ok(SftpPacket::Extended {
+                id: 12,
+                name: b"limits@openssh.com".to_vec(),
+                data: Vec::new()
+            })
+        );
+        let limits = SftpLimits {
+            max_packet_length: MAX_SFTP_PACKET as u64,
+            max_read_length: 32 * 1024,
+            max_write_length: 16 * 1024,
+            max_open_handles: 128,
+        };
+        let response = SftpPacket::ExtendedReply { id: 12, data: limits.encode() };
+        let decoded = SftpPacket::decode(&response.encode().unwrap()).unwrap();
+        assert_eq!(decoded.limits_response(), Ok(limits));
+        assert_eq!(SftpLimits::decode(&[0; 31]), Err(SftpError::Malformed("limits response")));
+        assert_eq!(
+            SftpPacket::ExtendedReply { id: 12, data: vec![0; MAX_SFTP_EXTENSION_DATA + 1] }
+                .encode(),
+            Err(SftpError::FieldTooLarge("extension response"))
         );
     }
 }

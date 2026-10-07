@@ -54,8 +54,9 @@ pub use security_key::{
     SecurityKeyPublicKey, SecurityKeySignOptions, SecurityKeySignature,
 };
 pub use sftp::{
-    MAX_SFTP_EXTENSIONS, MAX_SFTP_HANDLE, MAX_SFTP_OUTSTANDING, MAX_SFTP_PACKET, MAX_SFTP_STRING,
-    SftpAttributes, SftpClient, SftpError, SftpExtension, SftpPacket,
+    MAX_SFTP_EXTENSION_DATA, MAX_SFTP_EXTENSIONS, MAX_SFTP_HANDLE, MAX_SFTP_OUTSTANDING,
+    MAX_SFTP_PACKET, MAX_SFTP_STRING, SftpAttributes, SftpClient, SftpError, SftpExtension,
+    SftpLimits, SftpPacket,
 };
 pub use transport::{
     EXT_INFO_CLIENT, EXT_INFO_SERVER, KeyExchangeFamily, NegotiatedTransport, STRICT_KEX_CLIENT,
