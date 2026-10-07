@@ -15,6 +15,12 @@ pub const CEDAR_SCHEMA: &str = include_str!("../cedar/schema.cedarschema");
 /// Built-in role policies evaluated by the control plane.
 pub const BUILT_IN_POLICIES: &str = include_str!("../cedar/built-in-policies.cedar");
 
+/// Internal gateway gRPC source contract.
+pub const GATEWAY_CONTROL_PROTO: &str = include_str!("../proto/spl/gateway/v1/control.proto");
+
+/// Internal host-agent gRPC source contract.
+pub const HOST_AGENT_PROTO: &str = include_str!("../proto/spl/agent/v1/agent.proto");
+
 /// A control-plane resource envelope.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Resource {
@@ -127,7 +133,8 @@ pub struct ProblemDetails {
 #[cfg(test)]
 mod tests {
     use super::{
-        BUILT_IN_POLICIES, CEDAR_SCHEMA, ListQuery, Page, ProblemDetails, QueryError, Resource,
+        BUILT_IN_POLICIES, CEDAR_SCHEMA, GATEWAY_CONTROL_PROTO, HOST_AGENT_PROTO, ListQuery, Page,
+        ProblemDetails, QueryError, Resource,
     };
     use serde_json::json;
 
@@ -183,5 +190,66 @@ mod tests {
         for role in ["owner", "administrator", "security_auditor", "approver", "member"] {
             assert!(BUILT_IN_POLICIES.contains(role), "missing built-in role: {role}");
         }
+    }
+
+    fn assert_proto_contract(source: &str, package: &str, service: &str, rpcs: &[&str]) {
+        assert!(source.contains("syntax = \"proto3\";"));
+        assert!(source.contains(&format!("package {package};")));
+        assert!(source.contains(&format!("service {service} {{")));
+        for rpc in rpcs {
+            assert!(source.contains(&format!("rpc {rpc}(")), "missing RPC {rpc}");
+        }
+        for message in source.split("message ").skip(1) {
+            let Some(open) = message.find('{') else { continue };
+            let mut depth = 0usize;
+            let mut close = None;
+            for (index, byte) in message.as_bytes()[open..].iter().enumerate() {
+                match byte {
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = Some(open + index);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let body = close.map_or("", |close| &message[open + 1..close]);
+            let mut numbers = std::collections::BTreeSet::new();
+            for line in body.lines() {
+                let Some((_, number)) = line.split_once('=') else { continue };
+                let number = number.split(';').next().unwrap_or_default().trim();
+                let number = number.split_whitespace().next().unwrap_or_default();
+                if let Ok(number) = number.parse::<u32>() {
+                    assert!(number > 0, "protobuf field numbers start at one");
+                    assert!(numbers.insert(number), "duplicate protobuf field number {number}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn internal_grpc_contracts_have_stable_services_and_field_numbers() {
+        assert_proto_contract(
+            GATEWAY_CONTROL_PROTO,
+            "spl.gateway.v1",
+            "Control",
+            &[
+                "Register",
+                "Heartbeat",
+                "Subscribe",
+                "RequestRecordingKey",
+                "ReportSessionEvent",
+                "SubmitAudit",
+            ],
+        );
+        assert_proto_contract(
+            HOST_AGENT_PROTO,
+            "spl.agent.v1",
+            "Agent",
+            &["Enroll", "Heartbeat", "Subscribe", "RequestHostCertificate", "ReportConfiguration"],
+        );
     }
 }

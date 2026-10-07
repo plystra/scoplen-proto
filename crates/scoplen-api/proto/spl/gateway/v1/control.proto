@@ -1,0 +1,138 @@
+// SPDX-License-Identifier: Apache-2.0
+// Internal gateway-to-control-plane contract from 09-gateway-and-host-agent.md.
+
+syntax = "proto3";
+
+package spl.gateway.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// The control plane endpoint used by network gateways over mTLS.
+service Control {
+  // Registers a gateway with a single-use join token and CSR.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  // Reports bounded load and liveness figures.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  // Delivers signed policy, KRL, membership, and termination updates.
+  rpc Subscribe(SubscribeRequest) returns (stream ControlEvent);
+  // Delivers a recording data key encrypted to the gateway session key.
+  rpc RequestRecordingKey(RecordingKeyRequest) returns (RecordingKeyResponse);
+  // Records a gateway session lifecycle transition.
+  rpc ReportSessionEvent(SessionEventRequest) returns (SessionEventResponse);
+  // Submits already-authenticated audit events for durable storage.
+  rpc SubmitAudit(SubmitAuditRequest) returns (SubmitAuditResponse);
+}
+
+message RegisterRequest {
+  string gateway_id = 1; // lowercase UUID text, max 36 bytes
+  string network_id = 2; // lowercase UUID text, max 36 bytes
+  bytes join_token = 3; // opaque token, max 4096 bytes
+  bytes certificate_signing_request = 4; // DER CSR, max 64 KiB
+  string version = 5; // max 128 bytes
+  Load load = 6;
+}
+
+message RegisterResponse {
+  bytes certificate_chain = 1; // DER chain, max 128 KiB
+  google.protobuf.Timestamp certificate_expires_at = 2;
+  bytes gateway_host_ca = 3; // DER or SSH public key, max 16 KiB
+  uint64 policy_version = 4;
+}
+
+message Load {
+  uint32 active_sessions = 1; // max 1,000,000
+  uint32 pending_sessions = 2; // max 1,000,000
+  uint32 cpu_millis = 3; // 0..=100,000
+  uint64 bytes_in = 4;
+  uint64 bytes_out = 5;
+}
+
+message HeartbeatRequest {
+  string gateway_id = 1;
+  Load load = 2;
+  google.protobuf.Timestamp observed_at = 3;
+}
+
+message HeartbeatResponse {
+  uint64 policy_version = 1;
+  google.protobuf.Timestamp next_deadline = 2;
+}
+
+message SubscribeRequest {
+  string gateway_id = 1;
+  uint64 after_event_id = 2;
+}
+
+message ControlEvent {
+  uint64 event_id = 1;
+  google.protobuf.Timestamp issued_at = 2;
+  oneof event {
+    PolicyBundleUpdate policy_bundle = 10;
+    KrlUpdate krl = 11;
+    MembershipUpdate membership = 12;
+    SessionTermination termination = 13;
+  }
+}
+
+message PolicyBundleUpdate {
+  uint64 version = 1;
+  bytes signed_bundle = 2; // signed Cedar bundle, max 1 MiB
+}
+
+message KrlUpdate {
+  uint64 version = 1;
+  bytes krl = 2; // OpenSSH KRL, max 4 MiB
+}
+
+message MembershipUpdate {
+  string network_id = 1;
+  repeated GatewayMember gateways = 2; // max 1024
+}
+
+message GatewayMember {
+  string gateway_id = 1;
+  repeated string addresses = 2; // max 16 addresses, 512 bytes each
+  Load load = 3;
+  bool draining = 4;
+}
+
+message SessionTermination {
+  string session_id = 1;
+  string reason = 2; // max 1024 bytes
+}
+
+message RecordingKeyRequest {
+  string session_id = 1;
+  bytes gateway_session_public_key = 2; // max 512 bytes
+}
+
+message RecordingKeyResponse {
+  bytes encrypted_recording_key = 1; // max 4096 bytes
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+message SessionEventRequest {
+  string session_id = 1;
+  string gateway_id = 2;
+  SessionState state = 3;
+  google.protobuf.Timestamp occurred_at = 4;
+  bytes details = 5; // canonical CBOR, max 64 KiB
+}
+
+enum SessionState {
+  SESSION_STATE_UNSPECIFIED = 0;
+  SESSION_STATE_STARTED = 1;
+  SESSION_STATE_ENDED = 2;
+  SESSION_STATE_TERMINATED = 3;
+}
+
+message SessionEventResponse {}
+
+message SubmitAuditRequest {
+  string gateway_id = 1;
+  repeated bytes event = 2; // canonical event records, max 256 events
+}
+
+message SubmitAuditResponse {
+  uint32 accepted = 1;
+}

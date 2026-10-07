@@ -72,8 +72,10 @@ write-batch, acknowledgement, snapshot, version-history, content-free notificati
 key-bundle codecs in JSON and deterministic CBOR. K-6 now includes the bounded gateway client-hello
 frame (`ticket` and `dpop_proof`) with a published vector and failure-path coverage. OpenAPI
 resources now have an authored OpenAPI 3.1 document at `crates/scoplen-api/openapi/v1.yaml`,
-generated Rust envelope/query types, and the local `@scoplen/api` TypeScript package surface;
-Cedar schema and protobuf contracts remain open.
+generated Rust envelope/query types, and the local `@scoplen/api` TypeScript package surface.
+The internal `spl.gateway.v1.Control` and `spl.agent.v1.Agent` protobuf source contracts are
+also checked in under `crates/scoplen-api/proto`; Cedar engine integration, generated protobuf
+bindings, and concrete gRPC services remain open.
 
 ## Repository shape
 

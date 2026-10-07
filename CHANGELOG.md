@@ -14,6 +14,9 @@ All notable changes to `scoplen-proto` will be recorded here.
   RFC 9457 errors, binary KRL and recording responses, and WebSocket session monitoring.
 - Added the canonical K-5 Cedar entity/action schema and built-in Owner, Administrator, Security
   auditor, Approver, and Member policy source, with contract marker coverage in `scoplen-api`.
+- Added the K-6 internal protobuf source contracts for `spl.gateway.v1.Control` and
+  `spl.agent.v1.Agent`, including bounded registration, heartbeat, streamed policy/KRL/membership,
+  session, audit, enrollment, host-certificate, principal, and sshd-configuration messages.
 - Added the Rust workspace baseline and shared known-answer vector loader (roadmap S1).
 - Added the deterministic K-1 object model: strict CBOR, UUIDv7/HLC clocks, typed envelopes,
   tombstones, limits, merge algebra, and orphan detection (roadmap S2).

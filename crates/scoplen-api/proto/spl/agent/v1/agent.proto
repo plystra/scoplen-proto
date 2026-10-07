@@ -1,0 +1,132 @@
+// SPDX-License-Identifier: Apache-2.0
+// Host-agent-to-control-plane contract from 09-gateway-and-host-agent.md.
+
+syntax = "proto3";
+
+package spl.agent.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// The control plane endpoint used by an enrolled host agent over mTLS.
+service Agent {
+  // Enrolls a host with a single-use join token and CSR.
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+  // Reports agent and sshd health.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  // Delivers CA, KRL, principal, host-certificate, and termination updates.
+  rpc Subscribe(SubscribeRequest) returns (stream AgentEvent);
+  // Requests or renews the host certificate for an existing host key.
+  rpc RequestHostCertificate(HostCertificateRequest) returns (HostCertificateResponse);
+  // Reports the result of validating and applying an sshd configuration change.
+  rpc ReportConfiguration(ConfigurationReportRequest) returns (ConfigurationReportResponse);
+}
+
+message EnrollRequest {
+  string host_id = 1; // lowercase UUID text, max 36 bytes
+  bytes join_token = 2; // opaque token, max 4096 bytes
+  bytes certificate_signing_request = 3; // DER CSR, max 64 KiB
+  string agent_version = 4; // max 128 bytes
+  string platform = 5; // max 64 bytes
+  string sshd_version = 6; // max 128 bytes
+}
+
+message EnrollResponse {
+  bytes certificate_chain = 1; // DER chain, max 128 KiB
+  google.protobuf.Timestamp certificate_expires_at = 2;
+  bytes user_ca = 3; // OpenSSH CA public key, max 16 KiB
+  bytes revoked_krl = 4; // OpenSSH KRL, max 4 MiB
+  uint64 policy_version = 5;
+}
+
+message HeartbeatRequest {
+  string host_id = 1;
+  AgentStatus status = 2;
+  google.protobuf.Timestamp observed_at = 3;
+}
+
+message HeartbeatResponse {
+  uint64 policy_version = 1;
+  google.protobuf.Timestamp next_deadline = 2;
+}
+
+message AgentStatus {
+  string agent_version = 1;
+  string sshd_version = 2;
+  string configuration_state = 3; // max 64 bytes
+  google.protobuf.Timestamp last_krl_update = 4;
+  google.protobuf.Timestamp host_certificate_expires_at = 5;
+  bool instrumented_mode = 6;
+}
+
+message SubscribeRequest {
+  string host_id = 1;
+  uint64 after_event_id = 2;
+}
+
+message AgentEvent {
+  uint64 event_id = 1;
+  google.protobuf.Timestamp issued_at = 2;
+  oneof event {
+    UserCaUpdate user_ca = 10;
+    RevokedKrlUpdate revoked_krl = 11;
+    PrincipalsUpdate principals = 12;
+    HostCertificateCommand host_certificate = 13;
+    SessionTermination termination = 14;
+  }
+}
+
+message UserCaUpdate {
+  bytes active_ca = 1; // max 16 KiB
+  bytes next_ca = 2; // max 16 KiB
+}
+
+message RevokedKrlUpdate {
+  uint64 version = 1;
+  bytes krl = 2; // max 4 MiB
+}
+
+message PrincipalsUpdate {
+  repeated PrincipalMapping mappings = 1; // max 100,000
+}
+
+message PrincipalMapping {
+  string local_user = 1; // max 256 bytes
+  repeated string principals = 2; // max 1024 principals
+}
+
+message HostCertificateCommand {
+  bool renew = 1;
+  string key_id = 2; // max 256 bytes
+}
+
+message SessionTermination {
+  string session_id = 1;
+  string reason = 2; // max 1024 bytes
+}
+
+message HostCertificateRequest {
+  string host_id = 1;
+  bytes host_public_key = 2; // OpenSSH public key, max 16 KiB
+  repeated string principals = 3; // max 64 principals
+}
+
+message HostCertificateResponse {
+  bytes host_certificate = 1; // OpenSSH certificate, max 64 KiB
+  google.protobuf.Timestamp valid_after = 2;
+  google.protobuf.Timestamp valid_before = 3;
+}
+
+message ConfigurationReportRequest {
+  string host_id = 1;
+  ConfigurationState state = 2;
+  string detail = 3; // max 4096 bytes
+}
+
+enum ConfigurationState {
+  CONFIGURATION_STATE_UNSPECIFIED = 0;
+  CONFIGURATION_STATE_VALIDATED = 1;
+  CONFIGURATION_STATE_APPLIED = 2;
+  CONFIGURATION_STATE_REJECTED = 3;
+}
+
+message ConfigurationReportResponse {}
