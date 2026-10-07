@@ -62,7 +62,7 @@ recovery display and safety-number outputs are written as text.
 | `crypto.recovery-display` | raw recovery key | `SPL1-` display with checksum |
 | `crypto.recovery-blob` | raw recovery key, account UUID, ARK, nonce | encoded wrapped ARK |
 | `crypto.shamir-split` | secret, threshold, share count, coefficient bytes | serialized shares, separated by `|` |
-| `crypto.safety-number` | two Ed25519 public keys | twelve decimal digits |
+| `crypto.safety-number` | account UUID, Ed25519 public key, and X25519 KEM public key for each account | sixty decimal digits, both 32-byte fingerprints, and canonical `splsafety2:` QR text |
 | `crypto.local-db-key` | UTF-8 passphrase, database key, Argon2 memory KiB, time cost, parallelism, salt, nonce | encoded Argon2id wrapper |
 | `crypto.escrow-account-open`, `crypto.escrow-device-open` | recipient private key, encapsulated key, ciphertext | serialized authenticated Shamir share |
 | `crypto.qr-pairing` | pairing UUIDv7, P-256 KEM public key, P-256 signing public key | canonical `splpair1:` QR text |
