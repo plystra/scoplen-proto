@@ -71,7 +71,9 @@ challenge, signed-device request, and token response JSON codecs, plus K-4 sessi
 write-batch, acknowledgement, snapshot, version-history, content-free notification, and account
 key-bundle codecs in JSON and deterministic CBOR. K-6 now includes the bounded gateway client-hello
 frame (`ticket` and `dpop_proof`) with a published vector and failure-path coverage. OpenAPI
-resources, Cedar schema, and protobuf contracts remain open.
+resources now have an authored OpenAPI 3.1 document at `crates/scoplen-api/openapi/v1.yaml`,
+generated Rust envelope/query types, and the local `@scoplen/api` TypeScript package surface;
+Cedar schema and protobuf contracts remain open.
 
 ## Repository shape
 

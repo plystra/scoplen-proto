@@ -1,0 +1,3387 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Scoplen Control Plane API",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ],
+  "security": [
+    {
+      "accessToken": [],
+      "dpopProof": []
+    }
+  ],
+  "paths": {
+    "/accounts/me": {
+      "get": {
+        "operationId": "getCurrentAccount",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/accounts/me/devices": {
+      "get": {
+        "operationId": "listCurrentAccountDevices",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}": {
+      "get": {
+        "operationId": "listOrgs",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createOrgs",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/members": {
+      "get": {
+        "operationId": "listMembers",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createMembers",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/members/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getMembers",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateMembers",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteMembers",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/invitations": {
+      "get": {
+        "operationId": "listInvitations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createInvitations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/invitations/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getInvitations",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateInvitations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteInvitations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/groups": {
+      "get": {
+        "operationId": "listGroups",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createGroups",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/groups/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getGroups",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateGroups",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteGroups",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/identity-providers": {
+      "get": {
+        "operationId": "listIdentity-Providers",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createIdentity-Providers",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/identity-providers/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getIdentity-Providers",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateIdentity-Providers",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteIdentity-Providers",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/service-principals": {
+      "get": {
+        "operationId": "listService-Principals",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createService-Principals",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/service-principals/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getService-Principals",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateService-Principals",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteService-Principals",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/hosts": {
+      "get": {
+        "operationId": "listHosts",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createHosts",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/hosts/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getHosts",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateHosts",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteHosts",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/access-profiles": {
+      "get": {
+        "operationId": "listAccess-Profiles",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createAccess-Profiles",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/access-profiles/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getAccess-Profiles",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateAccess-Profiles",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteAccess-Profiles",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/routes": {
+      "get": {
+        "operationId": "listRoutes",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createRoutes",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/routes/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getRoutes",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateRoutes",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteRoutes",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/host-groups": {
+      "get": {
+        "operationId": "listHost-Groups",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createHost-Groups",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/host-groups/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getHost-Groups",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateHost-Groups",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteHost-Groups",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/snippets": {
+      "get": {
+        "operationId": "listSnippets",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createSnippets",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/snippets/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getSnippets",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateSnippets",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteSnippets",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/trust-records": {
+      "get": {
+        "operationId": "listTrust-Records",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createTrust-Records",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/trust-records/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getTrust-Records",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateTrust-Records",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteTrust-Records",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/gateway-networks": {
+      "get": {
+        "operationId": "listGateway-Networks",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createGateway-Networks",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/gateway-networks/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getGateway-Networks",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateGateway-Networks",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteGateway-Networks",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/inventory/imports": {
+      "get": {
+        "operationId": "listInventoryImports",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createInventoryImports",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/inventory/imports/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getInventoryImports",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateInventoryImports",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteInventoryImports",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/policies": {
+      "get": {
+        "operationId": "listPolicies",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createPolicies",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/policies/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getPolicies",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updatePolicies",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deletePolicies",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/roles": {
+      "get": {
+        "operationId": "listRoles",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createRoles",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/roles/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getRoles",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateRoles",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteRoles",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/grants": {
+      "get": {
+        "operationId": "listGrants",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createGrants",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/grants/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getGrants",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateGrants",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteGrants",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/access-requests": {
+      "get": {
+        "operationId": "listAccess-Requests",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createAccess-Requests",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/access-requests/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getAccess-Requests",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateAccess-Requests",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteAccess-Requests",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/certificate-authorities": {
+      "get": {
+        "operationId": "listCertificate-Authorities",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createCertificate-Authorities",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/certificate-authorities/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getCertificate-Authorities",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateCertificate-Authorities",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteCertificate-Authorities",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/certificates": {
+      "get": {
+        "operationId": "listCertificates",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createCertificates",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/certificates/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getCertificates",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateCertificates",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteCertificates",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/gateway-tickets": {
+      "get": {
+        "operationId": "listGateway-Tickets",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createGateway-Tickets",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/gateway-tickets/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getGateway-Tickets",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateGateway-Tickets",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteGateway-Tickets",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/credentials": {
+      "get": {
+        "operationId": "listCredentials",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createCredentials",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/credentials/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getCredentials",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateCredentials",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteCredentials",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/host-agents": {
+      "get": {
+        "operationId": "listHost-Agents",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createHost-Agents",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/host-agents/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getHost-Agents",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateHost-Agents",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteHost-Agents",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/sessions": {
+      "get": {
+        "operationId": "listSessions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createSessions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/sessions/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getSessions",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateSessions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteSessions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/recordings": {
+      "get": {
+        "operationId": "listRecordings",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createRecordings",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/recordings/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getRecordings",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateRecordings",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteRecordings",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/audit-events": {
+      "get": {
+        "operationId": "listAudit-Events",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createAudit-Events",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/audit-events/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getAudit-Events",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateAudit-Events",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteAudit-Events",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/audit-exports": {
+      "get": {
+        "operationId": "listAudit-Exports",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createAudit-Exports",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/audit-exports/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getAudit-Exports",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateAudit-Exports",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteAudit-Exports",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/integrations": {
+      "get": {
+        "operationId": "listIntegrations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Page"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createIntegrations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/integrations/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/org"
+        },
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "getIntegrations",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateIntegrations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteIntegrations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/policies/evaluate": {
+      "post": {
+        "operationId": "evaluatePolicy",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyEvaluationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Decision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyEvaluationResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/access-requests/{id}/decisions": {
+      "post": {
+        "operationId": "decideAccessRequest",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/id"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/certificate-authorities/{id}/krl": {
+      "get": {
+        "operationId": "getCertificateRevocationList",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OpenSSH KRL",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/sessions/{id}/monitor": {
+      "get": {
+        "operationId": "monitorSession",
+        "x-websocket": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/id"
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "WebSocket upgrade"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/recordings/{id}/playback": {
+      "get": {
+        "operationId": "playRecording",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          },
+          {
+            "$ref": "#/components/parameters/id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recording stream",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/orgs/{org}/audit-events/verify": {
+      "get": {
+        "operationId": "verifyAuditChain",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/org"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Verification result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Verification"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/admin/settings": {
+      "get": {
+        "operationId": "getAdminSettings",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateAdminSettings",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifMatch"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Write"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Resource"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "accessToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "DPoP"
+      },
+      "dpopProof": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "DPoP"
+      }
+    },
+    "parameters": {
+      "org": {
+        "name": "org",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "id": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "limit": {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        }
+      },
+      "cursor": {
+        "name": "cursor",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "maxLength": 512
+        }
+      },
+      "ifMatch": {
+        "name": "If-Match",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "maxLength": 256
+        }
+      },
+      "idempotency": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "maxLength": 256
+        }
+      }
+    },
+    "requestBodies": {
+      "Write": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "data"
+              ],
+              "properties": {
+                "data": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "responses": {
+      "Resource": {
+        "description": "Resource",
+        "headers": {
+          "ETag": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Resource"
+            }
+          }
+        }
+      },
+      "Page": {
+        "description": "Page",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Page"
+            }
+          }
+        }
+      },
+      "Problem": {
+        "description": "RFC 9457 problem details",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProblemDetails"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Resource": {
+        "type": "object",
+        "required": [
+          "id",
+          "etag",
+          "created_at",
+          "updated_at",
+          "data"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "etag": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "Page": {
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "etag",
+                "created_at",
+                "updated_at",
+                "data"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "etag": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "data": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code"
+        ],
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "minimum": 400,
+            "maximum": 599
+          },
+          "code": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean"
+          },
+          "extensions": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "DecisionRequest": {
+        "type": "object",
+        "required": [
+          "decision"
+        ],
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "deny"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        }
+      },
+      "PolicyEvaluationRequest": {
+        "type": "object",
+        "required": [
+          "action",
+          "resource",
+          "context"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "context": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "PolicyEvaluationResponse": {
+        "type": "object",
+        "required": [
+          "decision",
+          "policies"
+        ],
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "deny"
+            ]
+          },
+          "policies": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Verification": {
+        "type": "object",
+        "required": [
+          "valid"
+        ],
+        "properties": {
+          "valid": {
+            "type": "boolean"
+          },
+          "first_event": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_event": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      }
+    }
+  }
+}

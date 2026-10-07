@@ -8,6 +8,10 @@ All notable changes to `scoplen-proto` will be recorded here.
   deterministic CBOR map containing compact-JWS `ticket` and `dpop_proof` values. The codec rejects
   malformed or non-canonical maps, unknown fields, invalid JWS shapes, truncation, trailing bytes,
   and oversized unauthenticated frames, with published known-answer vectors.
+- Added the authored OpenAPI 3.1 control-plane contract for every resource family in K-5,
+  generated Rust envelopes and bounds-checked query types, and the `@scoplen/api` TypeScript
+  package surface. The document includes DPoP authentication, ETags, idempotency, pagination,
+  RFC 9457 errors, binary KRL and recording responses, and WebSocket session monitoring.
 - Added the Rust workspace baseline and shared known-answer vector loader (roadmap S1).
 - Added the deterministic K-1 object model: strict CBOR, UUIDv7/HLC clocks, typed envelopes,
   tombstones, limits, merge algebra, and orphan detection (roadmap S2).
