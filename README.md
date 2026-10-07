@@ -61,7 +61,8 @@ limits, bidirectional forwarding, EOF/close propagation, and protocol failure ma
 Win32 backend for the injected Pageant
 discovery adapter, transfer resume/progress, and interoperability work remain open. `SftpChannel`
 now composes the bounded v3 handshake and packet framing over an accepted SSH `session` channel
-with bounded subsystem failure and truncation mapping. The auth-agent channel boundary does not claim concrete engine scheduling or wire
+with bounded subsystem failure and truncation mapping; `SftpSession` adds bounded pipelining and
+request correlation on that channel. The auth-agent channel boundary does not claim concrete engine scheduling or wire
 interoperability until those workstreams are implemented and tested.
 The `scoplen-api` crate exposes the K-3 error-code registry, RFC 9457 problem details, and device
 challenge, signed-device request, and token response JSON codecs, plus K-4 session, change-feed,

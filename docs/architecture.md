@@ -56,7 +56,7 @@ SOCKS5 and HTTP CONNECT transports compose bounded proxy handshakes over `Transp
 1929 and HTTP CONNECT Basic authentication accept bounded zeroized credentials;
 `ProxyCommandTransport` composes a
 bounded direct child process over stdin/stdout without a shell and reaps it on shutdown or drop.
-The native Pageant backend, SFTP channel composition, and interoperability work remain open.
+The native Pageant backend, transfer resume/progress, and interoperability work remain open.
 The agent server can consume
 multiple bounded frames from a blocking stream through clean peer close while applying the same
 malformed and oversized-frame checks.
@@ -86,5 +86,5 @@ responses, request-id correlation for bounded pipelining, and the OpenSSH `limit
 `posix-rename@openssh.com`, `statvfs@openssh.com`, `fstatvfs@openssh.com`, `hardlink@openssh.com`,
 `fsync@openssh.com`, `lsetstat@openssh.com`, `expand-path@openssh.com`, and `copy-data`
 requests and responses. `SftpChannel` composes the bounded v3 handshake and packet framing over
-an accepted SSH `session` channel, while transfer resume/progress and the interoperability matrix
-remain open.
+an accepted SSH `session` channel; `SftpSession` layers bounded pipelining and request correlation
+on that channel, while transfer resume/progress and the interoperability matrix remain open.

@@ -1218,6 +1218,14 @@ impl SftpClient {
         self.pending.len()
     }
 
+    pub(crate) fn tracks_request(&self, id: u32) -> bool {
+        self.pending.contains(&id)
+    }
+
+    pub(crate) fn release_request(&mut self, id: u32) {
+        self.pending.remove(&id);
+    }
+
     fn queue<F>(&mut self, build: F) -> Result<SftpPacket, SftpError>
     where
         F: FnOnce(u32) -> SftpPacket,

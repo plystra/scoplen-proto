@@ -50,6 +50,84 @@ pub struct SftpChannel {
     extensions: Vec<SftpExtension>,
 }
 
+/// A negotiated SFTP channel with bounded request correlation and pipelining.
+#[derive(Debug)]
+pub struct SftpSession {
+    channel: SftpChannel,
+    client: SftpClient,
+}
+
+impl SftpSession {
+    /// Open and negotiate an SFTP v3 channel with a bounded outstanding-request pipeline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the SSH subsystem or SFTP handshake fails, or when the pipeline
+    /// bound is outside [`crate::MAX_SFTP_OUTSTANDING`].
+    pub async fn open(
+        connection: &ClientConnection,
+        max_outstanding: usize,
+    ) -> Result<Self, SftpChannelError> {
+        let channel = SftpChannel::open(connection).await?;
+        let mut client = SftpClient::new(max_outstanding)?;
+        client.accept_version(&SftpPacket::Version {
+            version: 3,
+            extensions: channel.extensions.clone(),
+        })?;
+        Ok(Self { channel, client })
+    }
+
+    /// Return the bounded extensions advertised by the server.
+    #[must_use]
+    pub fn extensions(&self) -> &[SftpExtension] {
+        self.channel.extensions()
+    }
+
+    /// Borrow the request builder and bounded correlation state.
+    #[must_use]
+    pub fn client_mut(&mut self) -> &mut SftpClient {
+        &mut self.client
+    }
+
+    /// Number of requests awaiting a response.
+    #[must_use]
+    pub fn pending_requests(&self) -> usize {
+        self.client.pending_requests()
+    }
+
+    /// Send a request previously built by [`Self::client_mut`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the packet does not refer to a request tracked by this session or
+    /// the channel cannot write it. A failed write releases its request slot.
+    pub async fn send_request(&mut self, packet: &SftpPacket) -> Result<(), SftpChannelError> {
+        let Some(id) = packet.request_id() else {
+            return Err(SftpError::Malformed("request has no request id").into());
+        };
+        if !self.client.tracks_request(id) {
+            return Err(SftpError::UnknownRequest.into());
+        }
+        if let Err(error) = self.channel.write_packet(packet).await {
+            self.client.release_request(id);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Read and correlate one response, releasing its pipeline slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the channel ends, the packet is malformed, or its request id is not
+    /// currently pending.
+    pub async fn read_response(&mut self) -> Result<SftpPacket, SftpChannelError> {
+        let packet = self.channel.read_packet().await?;
+        self.client.accept_response(&packet)?;
+        Ok(packet)
+    }
+}
+
 impl SftpChannel {
     /// Open a session, require SFTP subsystem acceptance, and negotiate SFTP version 3.
     ///
@@ -266,6 +344,52 @@ mod tests {
             channel.read_packet().await.expect("read realpath"),
             SftpPacket::Name { id: 1, entries } if entries[0].filename == b"/srv"
         ));
+        connection.disconnect().await.expect("disconnect client");
+    }
+
+    #[tokio::test]
+    async fn session_pipelines_bounded_requests_and_releases_responses() {
+        let mut server_config = russh::server::Config::default();
+        server_config.keys.push(
+            PrivateKey::random(
+                &mut ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng),
+                Algorithm::Ed25519,
+            )
+            .expect("server key"),
+        );
+        let server_config = Arc::new(server_config);
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind server");
+        let address = listener.local_addr().expect("server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept client");
+            let _ =
+                russh::server::run_stream(server_config, stream, SftpServer { buffer: Vec::new() })
+                    .await;
+        });
+
+        let verifier = |_host: &str, _key: &HostKey| Ok(());
+        let config = ClientConfig::new("127.0.0.1", address.port(), verifier).expect("config");
+        let mut connection = ClientConnection::connect(config).await.expect("connect client");
+        connection.authenticate_password("user", b"password").await.expect("authenticate client");
+        let mut session = SftpSession::open(&connection, 2).await.expect("open sftp session");
+        let first = session.client_mut().realpath(b"/first").expect("first request");
+        let second = session.client_mut().realpath(b"/second").expect("second request");
+        assert!(matches!(
+            session.client_mut().realpath(b"/third"),
+            Err(SftpError::OutstandingLimit)
+        ));
+        session.send_request(&first).await.expect("send first");
+        session.send_request(&second).await.expect("send second");
+        assert_eq!(session.pending_requests(), 2);
+        assert!(matches!(
+            session.read_response().await.expect("first response"),
+            SftpPacket::Name { id: 1, .. }
+        ));
+        assert!(matches!(
+            session.read_response().await.expect("second response"),
+            SftpPacket::Name { id: 2, .. }
+        ));
+        assert_eq!(session.pending_requests(), 0);
         connection.disconnect().await.expect("disconnect client");
     }
 }
