@@ -54,6 +54,8 @@ All notable changes to `scoplen-proto` will be recorded here.
 - Added bounded RFC 4252 `none`, `password` and password-change, and keyboard-interactive request,
   prompt, and response codecs; password and response bytes use zeroizing secret storage and
   malformed, NUL, truncation, and size failure paths are covered.
+- Added RSA software signers with strict `rsa-sha2-256` and `rsa-sha2-512` selection, SSH `ssh-rsa`
+  public-key blobs, certificate subject binding, and hash-substitution and malformed-key failures.
 - Added the stable HTTP error-code registry and RFC 9457 problem details with JSON and deterministic
   CBOR codecs, including malformed-input tests and a published CBOR vector.
 - Extended the stable error-code registry for authenticated sync HTTP adapters with

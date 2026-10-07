@@ -23,8 +23,8 @@ legacy names after modern defaults. Host certificate algorithms precede raw host
 preference present in each peer list, and enables RFC 8308 and strict-KEX markers only when both
 roles advertise them. `StrictKeyExchange` enforces the initial KEXINIT-first rule, KEX-family
 message admission, one-message limits, sequence-wrap refusal, and sequence-number reset after
-NEWKEYS. The engine-independent authentication boundary supplies Ed25519 and P-256 `Signer`
-adapters, FIDO2 `SecurityKeyProvider` adapters, RFC 4252 publickey probes and signed requests,
+NEWKEYS. The engine-independent authentication boundary supplies Ed25519, P-256, and RSA/SHA-2
+`Signer` adapters, FIDO2 `SecurityKeyProvider` adapters, RFC 4252 publickey probes and signed requests,
 bounded OpenSSH certificate parsing and validation, and a host-key trust callback that is called
 only after validation. Security-key requests preserve the OpenSSH application, user-presence and
 user-verification flags, and authenticator counter while rejecting malformed or unbounded input.
@@ -53,5 +53,6 @@ names, and forwarding failure reasons; the concrete engine, dynamic SOCKS listen
 composition remain separate outcomes.
 The authentication boundary also encodes `none`, `password` and password-change, and
 keyboard-interactive exchanges with bounded context, prompt, and response fields; password and
-interactive response bytes are held in zeroizing secret containers. Concrete engine integration
-and RSA signing remain open.
+interactive response bytes are held in zeroizing secret containers. `RsaSshSigner` accepts only RSA
+private keys and binds the selected `rsa-sha2-256` or `rsa-sha2-512` hash to the signature wrapper;
+raw `ssh-rsa` SHA-1 authentication is rejected. Concrete engine integration remains open.
