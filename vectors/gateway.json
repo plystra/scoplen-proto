@@ -1,0 +1,18 @@
+{
+  "format": "scoplen-test-vectors",
+  "version": 1,
+  "vectors": [
+    {
+      "id": "gateway-client-hello-cbor-v1",
+      "kind": "gateway.client_hello.cbor",
+      "input": "{\"ticket\":\"a.b.c\",\"dpop_proof\":\"d.e.f\"}",
+      "expected": "a2667469636b657465612e622e636a64706f705f70726f6f6665642e652e66"
+    },
+    {
+      "id": "gateway-client-hello-frame-v1",
+      "kind": "gateway.client_hello.frame",
+      "input": "{\"ticket\":\"a.b.c\",\"dpop_proof\":\"d.e.f\"}",
+      "expected": "0000001fa2667469636b657465612e622e636a64706f705f70726f6f6665642e652e66"
+    }
+  ]
+}
