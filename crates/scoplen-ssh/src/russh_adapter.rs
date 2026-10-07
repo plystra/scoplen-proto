@@ -26,6 +26,7 @@ use russh::{
 use scoplen_crypto::SecretVec;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use zeroize::Zeroize;
 
 use crate::{
@@ -37,6 +38,9 @@ use crate::{
 const MAX_CLIENT_HOST: usize = 4096;
 const MAX_CERTIFICATE_PRINCIPAL: usize = 4096;
 const MAX_PUBLICKEY_AUTH_PAYLOAD: usize = 256 * 1024;
+const DEFAULT_CLIENT_CHANNEL_LIMIT: usize = 64;
+/// Maximum number of channels that one client connection may keep open.
+pub const MAX_CLIENT_CHANNEL_LIMIT: usize = 256;
 const USERAUTH_REQUEST: u8 = 50;
 
 /// Errors raised while creating a concrete SSH client configuration.
@@ -51,6 +55,9 @@ pub enum ClientConfigError {
     /// The TCP destination port is not valid for an SSH endpoint.
     #[error("SSH client configuration port must be non-zero")]
     InvalidPort,
+    /// The simultaneous channel limit is zero or exceeds the supported bound.
+    #[error("SSH client channel limit must be between 1 and {MAX_CLIENT_CHANNEL_LIMIT}")]
+    InvalidChannelLimit,
 }
 
 /// Host-certificate policy used by the concrete host-key callback.
@@ -99,6 +106,7 @@ pub struct ClientConfig {
     inactivity_timeout: Option<Duration>,
     keepalive_interval: Option<Duration>,
     keepalive_max: usize,
+    channel_limit: usize,
 }
 
 impl fmt::Debug for ClientConfig {
@@ -111,6 +119,7 @@ impl fmt::Debug for ClientConfig {
             .field("inactivity_timeout", &self.inactivity_timeout)
             .field("keepalive_interval", &self.keepalive_interval)
             .field("keepalive_max", &self.keepalive_max)
+            .field("channel_limit", &self.channel_limit)
             .finish_non_exhaustive()
     }
 }
@@ -125,6 +134,7 @@ impl Clone for ClientConfig {
             inactivity_timeout: self.inactivity_timeout,
             keepalive_interval: self.keepalive_interval,
             keepalive_max: self.keepalive_max,
+            channel_limit: self.channel_limit,
         }
     }
 }
@@ -153,6 +163,7 @@ impl ClientConfig {
             inactivity_timeout: None,
             keepalive_interval: None,
             keepalive_max: 3,
+            channel_limit: DEFAULT_CLIENT_CHANNEL_LIMIT,
         })
     }
 
@@ -176,6 +187,15 @@ impl ClientConfig {
         self.keepalive_interval = interval;
         self.keepalive_max = max_missed;
         self
+    }
+
+    /// Bound simultaneous session and forwarding channels on one SSH connection.
+    pub fn with_channel_limit(mut self, limit: usize) -> Result<Self, ClientConfigError> {
+        if !(1..=MAX_CLIENT_CHANNEL_LIMIT).contains(&limit) {
+            return Err(ClientConfigError::InvalidChannelLimit);
+        }
+        self.channel_limit = limit;
+        Ok(self)
     }
 
     /// Return the configured host name.
@@ -279,6 +299,9 @@ pub enum ClientError {
     /// A channel operation could not be delivered or completed.
     #[error("SSH channel operation failed")]
     Channel,
+    /// The configured number of simultaneous channels is already open.
+    #[error("SSH channel limit of {max} has been reached")]
+    ChannelLimitReached { max: usize },
     /// The peer closed the connection or the event loop stopped.
     #[error("SSH connection closed")]
     ConnectionClosed,
@@ -342,6 +365,8 @@ impl From<russh::Error> for ClientError {
 /// A connected and authenticated-capable SSH client.
 pub struct ClientConnection {
     handle: client::Handle<ClientHandler>,
+    channel_slots: Arc<Semaphore>,
+    channel_limit: usize,
 }
 
 impl fmt::Debug for ClientConnection {
@@ -356,7 +381,11 @@ impl ClientConnection {
         let handler = ClientHandler::new(&config);
         let address = (config.host.clone(), config.port);
         let handle = client::connect(Arc::new(config.russh_config()), address, handler).await?;
-        Ok(Self { handle })
+        Ok(Self {
+            handle,
+            channel_slots: Arc::new(Semaphore::new(config.channel_limit)),
+            channel_limit: config.channel_limit,
+        })
     }
 
     /// Connect over a caller-provided byte stream and complete SSH key exchange.
@@ -367,7 +396,11 @@ impl ClientConnection {
         let handler = ClientHandler::new(&config);
         let handle =
             client::connect_stream(Arc::new(config.russh_config()), stream, handler).await?;
-        Ok(Self { handle })
+        Ok(Self {
+            handle,
+            channel_slots: Arc::new(Semaphore::new(config.channel_limit)),
+            channel_limit: config.channel_limit,
+        })
     }
 
     /// Connect to a target through an already connected and authenticated jump host.
@@ -458,7 +491,12 @@ impl ClientConnection {
 
     /// Open an RFC 4254 `session` channel.
     pub async fn open_session(&self) -> Result<ClientChannel, ClientError> {
-        self.handle.channel_open_session().await.map(ClientChannel::new).map_err(ClientError::from)
+        let permit = self.channel_permit()?;
+        self.handle
+            .channel_open_session()
+            .await
+            .map(|channel| ClientChannel::new(channel, permit))
+            .map_err(ClientError::from)
     }
 
     /// Open an RFC 4254 `direct-tcpip` channel through this connection.
@@ -473,6 +511,7 @@ impl ClientConnection {
             .map_err(ClientError::Config)?;
         validate_text(originator_address.as_bytes(), MAX_CLIENT_HOST, "originator address", true)
             .map_err(ClientError::Config)?;
+        let permit = self.channel_permit()?;
         self.handle
             .channel_open_direct_tcpip(
                 target_address.to_owned(),
@@ -481,8 +520,14 @@ impl ClientConnection {
                 originator_port,
             )
             .await
-            .map(ClientChannel::new)
+            .map(|channel| ClientChannel::new(channel, permit))
             .map_err(ClientError::from)
+    }
+
+    fn channel_permit(&self) -> Result<OwnedSemaphorePermit, ClientError> {
+        Arc::clone(&self.channel_slots)
+            .try_acquire_owned()
+            .map_err(|_| ClientError::ChannelLimitReached { max: self.channel_limit })
     }
 
     /// Ask the peer to disconnect this SSH connection.
@@ -529,6 +574,7 @@ pub enum ChannelEvent {
 /// A concrete session or forwarding channel.
 pub struct ClientChannel {
     channel: russh::Channel<client::Msg>,
+    permit: OwnedSemaphorePermit,
 }
 
 impl fmt::Debug for ClientChannel {
@@ -538,8 +584,8 @@ impl fmt::Debug for ClientChannel {
 }
 
 impl ClientChannel {
-    fn new(channel: russh::Channel<client::Msg>) -> Self {
-        Self { channel }
+    fn new(channel: russh::Channel<client::Msg>, permit: OwnedSemaphorePermit) -> Self {
+        Self { channel, permit }
     }
 
     /// Return the engine-local channel number for diagnostics and recorder correlation.
@@ -617,7 +663,7 @@ impl ClientChannel {
     /// [`ClientConnection::connect_stream`] and [`ClientConnection::connect_via_direct_tcpip`].
     #[must_use]
     pub fn into_stream(self) -> ClientChannelStream {
-        ClientChannelStream { inner: self.channel.into_stream() }
+        ClientChannelStream { inner: self.channel.into_stream(), _permit: self.permit }
     }
 
     /// Wait for the next peer event. `Ok(None)` means the engine closed the event stream.
@@ -674,6 +720,7 @@ impl ClientChannel {
 /// Opaque asynchronous stream backed by one SSH channel.
 pub struct ClientChannelStream {
     inner: russh::ChannelStream<client::Msg>,
+    _permit: OwnedSemaphorePermit,
 }
 
 impl fmt::Debug for ClientChannelStream {
@@ -1014,6 +1061,15 @@ mod tests {
             let _ = session.channel_success(channel);
             Ok(())
         }
+
+        async fn data(
+            &mut self,
+            channel: russh::ChannelId,
+            data: &[u8],
+            session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            session.data(channel, data.to_vec())
+        }
     }
 
     #[test]
@@ -1027,6 +1083,16 @@ mod tests {
         assert!(matches!(
             ClientConfig::new("example.test", 0, verifier),
             Err(ClientConfigError::InvalidPort)
+        ));
+        let verifier = |_host: &str, _key: &HostKey| Ok(());
+        let config = ClientConfig::new("example.test", 22, verifier).expect("config");
+        assert!(matches!(
+            config.clone().with_channel_limit(0),
+            Err(ClientConfigError::InvalidChannelLimit)
+        ));
+        assert!(matches!(
+            config.with_channel_limit(MAX_CLIENT_CHANNEL_LIMIT + 1),
+            Err(ClientConfigError::InvalidChannelLimit)
         ));
     }
 
@@ -1131,6 +1197,80 @@ mod tests {
             .expect("resize callback")
             .expect("resize event");
         assert_eq!(observed, expected);
+        connection.disconnect().await.expect("disconnect client");
+    }
+
+    #[tokio::test]
+    async fn one_connection_multiplexes_and_bounds_independent_channels() {
+        let (changes, _received) = mpsc::channel(1);
+        let mut server_config = russh::server::Config::default();
+        server_config.keys.push(
+            PrivateKey::random(
+                &mut ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng),
+                Algorithm::Ed25519,
+            )
+            .expect("server key"),
+        );
+        let server_config = Arc::new(server_config);
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind server");
+        let address = listener.local_addr().expect("server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept client");
+            let _ =
+                russh::server::run_stream(server_config, stream, ResizeServer { changes }).await;
+        });
+
+        let verifier = |_host: &str, _key: &HostKey| Ok(());
+        let config = ClientConfig::new("127.0.0.1", address.port(), verifier)
+            .expect("config")
+            .with_channel_limit(2)
+            .expect("channel limit");
+        let mut connection = ClientConnection::connect(config).await.expect("connect client");
+        connection.authenticate_password("user", b"password").await.expect("authenticate client");
+
+        let mut first = connection.open_session().await.expect("first channel");
+        let mut second = connection.open_session().await.expect("second channel");
+        assert_ne!(first.id(), second.id());
+        assert!(matches!(
+            connection.open_session().await,
+            Err(ClientError::ChannelLimitReached { max: 2 })
+        ));
+        assert!(matches!(
+            connection.open_direct_tcpip("example.test", 22, "127.0.0.1", 1).await,
+            Err(ClientError::ChannelLimitReached { max: 2 })
+        ));
+
+        first.send_data(b"first").await.expect("send first");
+        second.send_data(b"second").await.expect("send second");
+        assert!(matches!(
+            timeout(Duration::from_secs(5), first.next_event()).await.expect("first response"),
+            Ok(Some(ChannelEvent::Data(bytes))) if bytes == b"first"
+        ));
+        assert!(matches!(
+            timeout(Duration::from_secs(5), second.next_event()).await.expect("second response"),
+            Ok(Some(ChannelEvent::Data(bytes))) if bytes == b"second"
+        ));
+
+        drop(first);
+        let rejected = timeout(
+            Duration::from_secs(5),
+            connection.open_direct_tcpip("example.test", 22, "127.0.0.1", 1),
+        )
+        .await
+        .expect("direct channel rejection");
+        assert!(matches!(rejected, Err(ClientError::ChannelOpen { .. })));
+        let third = connection.open_session().await.expect("slot released on channel drop");
+        drop(third);
+        let stream = second.into_stream();
+        let extra = connection.open_session().await.expect("one stream still reserves one slot");
+        assert!(matches!(
+            connection.open_session().await,
+            Err(ClientError::ChannelLimitReached { max: 2 })
+        ));
+        drop(stream);
+        let fourth = connection.open_session().await.expect("stream drop releases slot");
+        drop(fourth);
+        drop(extra);
         connection.disconnect().await.expect("disconnect client");
     }
 

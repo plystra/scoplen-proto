@@ -51,12 +51,14 @@ handles and extension data. A concrete `russh` adapter now owns TCP or caller-su
 handshakes, validates raw keys and host certificates before invoking the trust callback, supports
 password authentication, and exposes opaque session and `direct-tcpip` channels with PTY, shell,
 exec, window-change, bounded data, EOF, close, and peer-event operations. A `ClientChannelStream`
-can carry a target handshake through a jump host with `ClientConnection::connect_via_direct_tcpip`; repeating
-the operation composes arbitrary jump depth while retaining each parent connection. The adapter
-keeps the engine types out of the public API. A bounded SOCKS4a/SOCKS5 dynamic listener now
-composes the handshake with
-`direct-tcpip`, including cancellation, concurrency limits, bidirectional forwarding, EOF/close
-propagation, and protocol failure mapping. A native Win32 backend for the injected Pageant
+can carry a target handshake through a jump host with
+`ClientConnection::connect_via_direct_tcpip`; repeating the operation composes arbitrary jump
+depth while retaining each parent connection. One connection multiplexes session and forwarding
+channels with a configurable simultaneous-channel cap; channel or stream drop releases a slot.
+The adapter keeps the engine types out of the public API. A bounded SOCKS4a/SOCKS5 dynamic
+listener now composes the handshake with `direct-tcpip`, including cancellation, concurrency
+limits, bidirectional forwarding, EOF/close propagation, and protocol failure mapping. A native
+Win32 backend for the injected Pageant
 discovery adapter, transfer resume/progress, SFTP channel composition, and interoperability work
 remain open. The auth-agent channel boundary does not claim concrete engine scheduling or wire
 interoperability until those workstreams are implemented and tested.
