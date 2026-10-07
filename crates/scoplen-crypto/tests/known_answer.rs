@@ -10,9 +10,9 @@ use scoplen_crypto::{
     PairingContext, PairingInitiator, PairingQrPayload, PairingResponder, PairingRole,
     PrimitiveError, RecoveryBlob, RecoveryKey, RevocationStatement, SecretBytes, ShamirShare,
     XChaChaNonce, combine_shamir, ed25519_verify, hkdf_sha256, hpke_open_account, hpke_open_device,
-    open_escrow_share_from_account, open_escrow_share_from_device, p256_verify, safety_number,
-    split_shamir_with_randomness, unwrap_key_from_device, xchacha20poly1305_open,
-    xchacha20poly1305_seal,
+    open_escrow_share_from_account, open_escrow_share_from_device, p256_verify, safety_fingerprint,
+    safety_number, safety_qr, split_shamir_with_randomness, unwrap_key_from_device,
+    verify_safety_qr, xchacha20poly1305_open, xchacha20poly1305_seal,
 };
 use scoplen_model::Object;
 use scoplen_test_vectors::VectorDocument;
@@ -321,11 +321,58 @@ fn fixture(kind: &str, input: &str, expected: &str) {
             );
         }
         "crypto.safety-number" => {
-            let f = fields(input, 2);
-            let left = fixed(f[0]);
-            let right = fixed(f[1]);
-            assert_eq!(safety_number(&left, &right), expected);
-            assert_eq!(safety_number(&right, &left), expected);
+            let f = fields(input, 6);
+            let e = fields(expected, 4);
+            let left_id = uuid(f[0]);
+            let left_signing = fixed(f[1]);
+            let left_kem = fixed(f[2]);
+            let right_id = uuid(f[3]);
+            let right_signing = fixed(f[4]);
+            let right_kem = fixed(f[5]);
+            let left_fingerprint = safety_fingerprint(left_id, &left_signing, &left_kem);
+            let right_fingerprint = safety_fingerprint(right_id, &right_signing, &right_kem);
+            assert_eq!(hex(left_fingerprint), e[1]);
+            assert_eq!(hex(right_fingerprint), e[2]);
+            assert_eq!(
+                safety_number(
+                    left_id,
+                    &left_signing,
+                    &left_kem,
+                    right_id,
+                    &right_signing,
+                    &right_kem,
+                ),
+                e[0]
+            );
+            assert_eq!(
+                safety_qr(right_id, &right_signing, &right_kem, left_id, &left_signing, &left_kem,),
+                e[3]
+            );
+            verify_safety_qr(
+                left_id,
+                &left_signing,
+                &left_kem,
+                right_id,
+                &right_signing,
+                &right_kem,
+                e[3],
+            )
+            .expect("safety QR verifies");
+            let mut tampered = e[3].to_owned();
+            let last = tampered.len() - 1;
+            tampered.replace_range(last.., if tampered.ends_with('0') { "1" } else { "0" });
+            assert_eq!(
+                verify_safety_qr(
+                    left_id,
+                    &left_signing,
+                    &left_kem,
+                    right_id,
+                    &right_signing,
+                    &right_kem,
+                    &tampered,
+                ),
+                Err(PrimitiveError::Authentication)
+            );
         }
         "crypto.local-db-key" => {
             let f = fields(input, 7);

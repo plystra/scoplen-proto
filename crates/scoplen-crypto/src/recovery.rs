@@ -3,9 +3,10 @@
 
 #![allow(clippy::missing_errors_doc)]
 
-use std::fmt;
+use std::{fmt, fmt::Write as _};
 
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 use crate::{
@@ -15,6 +16,8 @@ use crate::{
 
 const RECOVERY_PREFIX: &str = "SPL1-";
 const RECOVERY_INFO: &[u8] = b"spl-recovery-v1";
+const SAFETY_DOMAIN: &[u8] = b"spl-safety-v2";
+const SAFETY_QR_PREFIX: &str = "splsafety2:";
 const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 /// A 256-bit recovery key that is zeroized and redacted in memory.
@@ -170,19 +173,161 @@ fn recovery_wrapping_key(
     SecretBytes::from_slice(&bytes).ok_or(PrimitiveError::InvalidKey)
 }
 
-/// Derive a short, symmetric safety number from two Ed25519 account public keys.
+/// Derive an account fingerprint for safety-number verification.
+///
+/// The fingerprint includes both account public keys and the account identifier. The account
+/// identifier is part of the input so a key pair cannot be transplanted to another account while
+/// keeping the same displayed value.
 #[must_use]
-pub fn safety_number(left: &[u8; 32], right: &[u8; 32]) -> String {
-    let (first, second) = if left <= right { (left, right) } else { (right, left) };
+pub fn safety_fingerprint(
+    account_id: Uuid,
+    signing_public_key: &[u8; 32],
+    kem_public_key: &[u8; 32],
+) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(b"spl-safety-v1");
-    hasher.update(first);
-    hasher.update(second);
-    let digest = hasher.finalize();
-    let mut prefix = [0_u8; 8];
-    prefix.copy_from_slice(&digest[..8]);
-    let number = u64::from_be_bytes(prefix) % 1_000_000_000_000;
-    format!("{number:012}")
+    hasher.update(SAFETY_DOMAIN);
+    hasher.update(account_id.as_bytes());
+    hasher.update(signing_public_key);
+    hasher.update(kem_public_key);
+    hasher.finalize().into()
+}
+
+/// Derive the canonical sixty-digit safety number for two accounts.
+///
+/// Each account contributes six five-digit groups from its fingerprint. The account with the
+/// lower raw UUID bytes is rendered first, making the result independent of call order.
+#[must_use]
+pub fn safety_number(
+    left_account_id: Uuid,
+    left_signing_public_key: &[u8; 32],
+    left_kem_public_key: &[u8; 32],
+    right_account_id: Uuid,
+    right_signing_public_key: &[u8; 32],
+    right_kem_public_key: &[u8; 32],
+) -> String {
+    let (first, second) = ordered_fingerprints(
+        left_account_id,
+        left_signing_public_key,
+        left_kem_public_key,
+        right_account_id,
+        right_signing_public_key,
+        right_kem_public_key,
+    );
+    let mut output = String::with_capacity(60);
+    append_safety_digits(&mut output, &first);
+    append_safety_digits(&mut output, &second);
+    output
+}
+
+/// Encode the two account fingerprints as the canonical safety-number QR payload.
+#[must_use]
+pub fn safety_qr(
+    left_account_id: Uuid,
+    left_signing_public_key: &[u8; 32],
+    left_kem_public_key: &[u8; 32],
+    right_account_id: Uuid,
+    right_signing_public_key: &[u8; 32],
+    right_kem_public_key: &[u8; 32],
+) -> String {
+    let (first, second) = ordered_fingerprints(
+        left_account_id,
+        left_signing_public_key,
+        left_kem_public_key,
+        right_account_id,
+        right_signing_public_key,
+        right_kem_public_key,
+    );
+    let mut output = String::with_capacity(SAFETY_QR_PREFIX.len() + 128);
+    output.push_str(SAFETY_QR_PREFIX);
+    append_lower_hex(&mut output, &first);
+    append_lower_hex(&mut output, &second);
+    output
+}
+
+/// Verify a scanned safety-number QR payload against two account key records.
+///
+/// The two fingerprints are compared in constant time after strict canonical parsing. A payload
+/// with the wrong prefix, length, or alphabet is rejected as an invalid encoding; a well-formed
+/// payload for different keys is an authentication failure.
+pub fn verify_safety_qr(
+    left_account_id: Uuid,
+    left_signing_public_key: &[u8; 32],
+    left_kem_public_key: &[u8; 32],
+    right_account_id: Uuid,
+    right_signing_public_key: &[u8; 32],
+    right_kem_public_key: &[u8; 32],
+    encoded: &str,
+) -> Result<(), PrimitiveError> {
+    let Some(payload) = encoded.strip_prefix(SAFETY_QR_PREFIX) else {
+        return Err(PrimitiveError::InvalidEncoding);
+    };
+    if payload.len() != 128
+        || !payload.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(PrimitiveError::InvalidEncoding);
+    }
+
+    let mut provided = [0_u8; 64];
+    for (index, pair) in payload.as_bytes().chunks_exact(2).enumerate() {
+        provided[index] = (hex_value(pair[0])? << 4) | hex_value(pair[1])?;
+    }
+
+    let (first, second) = ordered_fingerprints(
+        left_account_id,
+        left_signing_public_key,
+        left_kem_public_key,
+        right_account_id,
+        right_signing_public_key,
+        right_kem_public_key,
+    );
+    let first_matches = first.as_slice().ct_eq(&provided[..32]);
+    let second_matches = second.as_slice().ct_eq(&provided[32..]);
+    if (first_matches & second_matches).unwrap_u8() == 1 {
+        Ok(())
+    } else {
+        Err(PrimitiveError::Authentication)
+    }
+}
+
+fn ordered_fingerprints(
+    left_account_id: Uuid,
+    left_signing_public_key: &[u8; 32],
+    left_kem_public_key: &[u8; 32],
+    right_account_id: Uuid,
+    right_signing_public_key: &[u8; 32],
+    right_kem_public_key: &[u8; 32],
+) -> ([u8; 32], [u8; 32]) {
+    let left = safety_fingerprint(left_account_id, left_signing_public_key, left_kem_public_key);
+    let right =
+        safety_fingerprint(right_account_id, right_signing_public_key, right_kem_public_key);
+    if left_account_id.as_bytes() <= right_account_id.as_bytes() {
+        (left, right)
+    } else {
+        (right, left)
+    }
+}
+
+fn append_safety_digits(output: &mut String, fingerprint: &[u8; 32]) {
+    for block in fingerprint.chunks_exact(5) {
+        let value = u64::from_be_bytes([0, 0, 0, block[0], block[1], block[2], block[3], block[4]])
+            % 100_000;
+        write!(output, "{value:05}").expect("writing to String cannot fail");
+    }
+}
+
+fn append_lower_hex(output: &mut String, bytes: &[u8; 32]) {
+    for byte in bytes {
+        write!(output, "{byte:02x}").expect("writing to String cannot fail");
+    }
+}
+
+fn hex_value(byte: u8) -> Result<u8, PrimitiveError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(PrimitiveError::InvalidEncoding),
+    }
 }
 
 fn encode_crockford(bytes: &[u8; 32]) -> String {
@@ -286,11 +431,102 @@ mod tests {
         );
     }
 
+    fn safety_accounts() -> (Uuid, [u8; 32], [u8; 32], Uuid, [u8; 32], [u8; 32]) {
+        (
+            Uuid::from_bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
+            [0x11; 32],
+            [0x33; 32],
+            Uuid::from_bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]),
+            [0x22; 32],
+            [0x44; 32],
+        )
+    }
+
     #[test]
-    fn safety_number_is_order_independent() {
-        let left = [1; 32];
-        let right = [2; 32];
-        assert_eq!(safety_number(&left, &right), safety_number(&right, &left));
-        assert_eq!(safety_number(&left, &right).len(), 12);
+    fn safety_number_is_order_independent_and_binds_both_keys() {
+        let (left_id, left_signing, left_kem, right_id, right_signing, right_kem) =
+            safety_accounts();
+        let number =
+            safety_number(left_id, &left_signing, &left_kem, right_id, &right_signing, &right_kem);
+        assert_eq!(number, "106799354084161029559547270136576357671666966721692584967152");
+        assert_eq!(number.len(), 60);
+        assert_eq!(
+            number,
+            safety_number(right_id, &right_signing, &right_kem, left_id, &left_signing, &left_kem,)
+        );
+        let changed = safety_number(
+            left_id,
+            &left_signing,
+            &left_kem,
+            Uuid::from_bytes([0; 16]),
+            &right_signing,
+            &right_kem,
+        );
+        assert_ne!(number, changed);
+    }
+
+    #[test]
+    fn safety_qr_round_trips_and_rejects_noncanonical_or_mismatched_payloads() {
+        let (left_id, left_signing, left_kem, right_id, right_signing, right_kem) =
+            safety_accounts();
+        let qr = safety_qr(left_id, &left_signing, &left_kem, right_id, &right_signing, &right_kem);
+        assert_eq!(
+            qr,
+            "splsafety2:9f029af897b818c4322425a716e0012ef2066ccbaa6168c13017de783eb83d0bb1de633f639bd7df74ac65c4acf836284e6a29a904f5df5e99f0b3e345708470"
+        );
+        verify_safety_qr(
+            right_id,
+            &right_signing,
+            &right_kem,
+            left_id,
+            &left_signing,
+            &left_kem,
+            &qr,
+        )
+        .expect("QR payload verifies");
+
+        let mut uppercase = qr.clone();
+        uppercase.replace_range(11..12, "A");
+        assert_eq!(
+            verify_safety_qr(
+                left_id,
+                &left_signing,
+                &left_kem,
+                right_id,
+                &right_signing,
+                &right_kem,
+                &uppercase,
+            ),
+            Err(PrimitiveError::InvalidEncoding)
+        );
+
+        let mut mismatched = qr;
+        let last = mismatched.len() - 1;
+        mismatched.replace_range(last.., if mismatched.ends_with('0') { "1" } else { "0" });
+        assert_eq!(
+            verify_safety_qr(
+                left_id,
+                &left_signing,
+                &left_kem,
+                right_id,
+                &right_signing,
+                &right_kem,
+                &mismatched,
+            ),
+            Err(PrimitiveError::Authentication)
+        );
+
+        assert_eq!(
+            verify_safety_qr(
+                left_id,
+                &left_signing,
+                &left_kem,
+                right_id,
+                &right_signing,
+                &right_kem,
+                "splsafety2:00",
+            ),
+            Err(PrimitiveError::InvalidEncoding)
+        );
     }
 }

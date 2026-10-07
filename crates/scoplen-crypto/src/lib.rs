@@ -43,8 +43,8 @@ pub use primitives::{
     argon2id_derive, argon2id_derive_with_params, hkdf_sha256, random_bytes, random_key,
     random_nonce, xchacha20poly1305_open, xchacha20poly1305_seal,
 };
-pub use recovery::safety_number;
 pub use recovery::{RecoveryBlob, RecoveryKey};
+pub use recovery::{safety_fingerprint, safety_number, safety_qr, verify_safety_qr};
 pub use secret::{SecretBytes, SecretVec, SymmetricKey, XChaChaNonce};
 pub use shamir::{ShamirShare, combine_shamir, split_shamir, split_shamir_with_randomness};
 pub use signature::{
