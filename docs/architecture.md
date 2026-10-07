@@ -44,9 +44,9 @@ compatibility is available on Windows through the same bounded framing; legacy W
 remains open. The concrete `russh` client adapter now owns TCP and caller-supplied stream
 handshakes, validates host keys and certificates before the trust callback, supports password
 authentication, and exposes opaque session and `direct-tcpip` channels with PTY, shell, exec,
-bounded data, EOF, close, and peer-event operations. The native Pageant backend, proxy
-composition, dynamic SOCKS listeners, SFTP channel composition, and interoperability work remain
-open.
+bounded data, EOF, close, and peer-event operations. Outbound SOCKS5 and HTTP CONNECT transports
+compose bounded proxy handshakes over `Transport`; the native Pageant backend, SFTP channel
+composition, and interoperability work remain open.
 The agent server can consume
 multiple bounded frames from a blocking stream through clean peer close while applying the same
 malformed and oversized-frame checks.

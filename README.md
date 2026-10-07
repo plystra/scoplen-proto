@@ -20,7 +20,9 @@ administrator recovery verification code. S3 remains incomplete while pairing is
 The `scoplen-ssh` crate exposes K-7's ordered algorithm policy, role-specific offers, strict key
 exchange state, a bounded direct TCP byte transport, and engine-independent authentication
 boundaries. `TcpTransport` limits host resolution, applies one total connect timeout, and enables
-`TCP_NODELAY`; it does not perform SSH negotiation or authentication. Software Ed25519, P-256, and
+`TCP_NODELAY`; `Socks5Transport` and `HttpConnectTransport` add bounded no-auth SOCKS5 and HTTP
+CONNECT proxy composition with handshake-only socket timeouts. The transports do not perform SSH
+negotiation or authentication. Software Ed25519, P-256, and
 RSA/SHA-2 signers, FIDO2 security-key hooks, RFC 4252 `none`, password and keyboard-interactive
 codecs, certificate validation, and host-verification callbacks are available. Agent support
 includes bounded Unix-socket and Windows named-pipe streams, Pageant named-pipe compatibility,
