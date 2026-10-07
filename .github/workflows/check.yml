@@ -34,6 +34,7 @@ jobs:
           cargo +nightly fuzz build object_decoder
           cargo +nightly fuzz build crypto_decoders
           cargo +nightly fuzz build agent_decoder
+          cargo +nightly fuzz build sftp_decoder
 
   dependency-audit:
     name: Dependency policy

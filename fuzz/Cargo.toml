@@ -41,3 +41,10 @@ path = "fuzz_targets/agent_decoder.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "sftp_decoder"
+path = "fuzz_targets/sftp_decoder.rs"
+test = false
+doc = false
+bench = false
