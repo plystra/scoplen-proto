@@ -23,7 +23,10 @@ legacy names after modern defaults. Host certificate algorithms precede raw host
 preference present in each peer list, and enables RFC 8308 and strict-KEX markers only when both
 roles advertise them. `StrictKeyExchange` enforces the initial KEXINIT-first rule, KEX-family
 message admission, one-message limits, sequence-wrap refusal, and sequence-number reset after
-NEWKEYS. The engine-independent authentication boundary supplies Ed25519, P-256, and RSA/SHA-2
+NEWKEYS. `TcpTransport` provides a bounded direct TCP byte stream with capped resolution results,
+one total connect timeout, `TCP_NODELAY`, typed read/write failures, and `Read`/`Write` adapters.
+It intentionally stops before SSH version exchange, key exchange, authentication, or channel
+scheduling. The engine-independent authentication boundary supplies Ed25519, P-256, and RSA/SHA-2
 `Signer` adapters, FIDO2 `SecurityKeyProvider` adapters, RFC 4252 publickey probes and signed requests,
 bounded OpenSSH certificate parsing and validation, and a host-key trust callback that is called
 only after validation. Security-key requests preserve the OpenSSH application, user-presence and
@@ -38,7 +41,8 @@ channel-data fragments. `AuthAgentChannel` composes that adapter with the bounde
 `auth-agent@openssh.com` open, data, EOF, and close lifecycle; it validates channel numbers and
 peer packet limits and reports clean versus truncated close outcomes. Pageant named-pipe
 compatibility is available on Windows through the same bounded framing; legacy WM_COPYDATA discovery
-remains open. The concrete SSH transport, channel engine, and interoperability work remain open.
+remains open. The concrete SSH handshake and channel engine, proxy composition, and
+interoperability work remain open.
 The agent server can consume
 multiple bounded frames from a blocking stream through clean peer close while applying the same
 malformed and oversized-frame checks.
@@ -67,5 +71,5 @@ and symlink), binary-safe handles and extension data, attributes, status, and di
 responses, request-id correlation for bounded pipelining, and the OpenSSH `limits@openssh.com`,
 `posix-rename@openssh.com`, `statvfs@openssh.com`, `fstatvfs@openssh.com`, `hardlink@openssh.com`,
 `fsync@openssh.com`, `lsetstat@openssh.com`, `expand-path@openssh.com`, and `copy-data`
-requests and responses. Concrete russh channel integration, transfer resume/progress, and the
-interoperability matrix remain open.
+requests and responses. Concrete russh handshake/channel integration, transfer resume/progress,
+and the interoperability matrix remain open.

@@ -18,7 +18,9 @@ for device and account recipients. The published K-2 known-answer set is exercis
 `scoplen-crypto` public API, including account/request-bound escrow share contexts and the
 administrator recovery verification code. S3 remains incomplete while pairing is unimplemented.
 The `scoplen-ssh` crate exposes K-7's ordered algorithm policy, role-specific offers, strict key
-exchange state, and engine-independent authentication boundaries. Software Ed25519, P-256, and
+exchange state, a bounded direct TCP byte transport, and engine-independent authentication
+boundaries. `TcpTransport` limits host resolution, applies one total connect timeout, and enables
+`TCP_NODELAY`; it does not perform SSH negotiation or authentication. Software Ed25519, P-256, and
 RSA/SHA-2 signers, FIDO2 security-key hooks, RFC 4252 `none`, password and keyboard-interactive
 codecs, certificate validation, and host-verification callbacks are available. Agent support
 includes bounded Unix-socket and Windows named-pipe streams, Pageant named-pipe compatibility,
@@ -38,11 +40,11 @@ requests and responses, bounded
 request correlation, and the OpenSSH `limits@openssh.com`, `posix-rename@openssh.com`,
 `statvfs@openssh.com`, `fstatvfs@openssh.com`, `hardlink@openssh.com`, `fsync@openssh.com`,
 `lsetstat@openssh.com`, `expand-path@openssh.com`, and `copy-data` extensions, with binary-safe
-handles and extension data. These are protocol boundaries; concrete russh connection and channel
-engines, a native Win32 backend for the injected Pageant discovery adapter, transfer
-resume/progress, dynamic SOCKS listeners, and interoperability work remain open. The auth-agent
-channel boundary does not claim concrete engine scheduling or wire interoperability until those
-workstreams are implemented and tested.
+handles and extension data. The direct TCP transport is a byte-stream boundary only; concrete
+russh SSH handshake and channel engines, a native Win32 backend for the injected Pageant discovery
+adapter, transfer resume/progress, dynamic SOCKS listeners, and interoperability work remain open.
+The auth-agent channel boundary does not claim concrete engine scheduling or wire interoperability
+until those workstreams are implemented and tested.
 The `scoplen-api` crate exposes the K-3 error-code registry, RFC 9457 problem details, and device
 challenge, signed-device request, and token response JSON codecs, plus K-4 session, change-feed,
 write-batch, acknowledgement, snapshot, version-history, content-free notification, and account

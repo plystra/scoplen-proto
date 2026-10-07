@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Shared SSH protocol core for Scoplen clients and gateways.
 //!
-//! The algorithm policy, engine-independent transport boundary, authentication boundary, and
-//! security-key wire support for K-7. The concrete SSH engine, channels, SFTP, and agent
-//! transports remain separate so callers do not depend on a particular engine.
+//! The algorithm policy, direct byte transport boundary, engine-independent authentication and
+//! channel boundaries, and security-key wire support for K-7. The concrete SSH handshake engine,
+//! channel scheduling, SFTP transfer engine, and proxy composition remain separate so callers do
+//! not depend on a particular engine.
 
 #![forbid(unsafe_code)]
 
@@ -17,6 +18,7 @@ mod policy;
 mod security_key;
 mod sftp;
 mod socks;
+mod tcp;
 mod transport;
 
 #[cfg(unix)]
@@ -68,6 +70,9 @@ pub use sftp::{
 pub use socks::{
     MAX_SOCKS_BUFFER, MAX_SOCKS_DOMAIN, MAX_SOCKS_USER_ID, SocksAddress, SocksBindAddress,
     SocksConnectRequest, SocksError, SocksHandshake, SocksProgress, SocksReply, SocksVersion,
+};
+pub use tcp::{
+    MAX_TCP_ADDRESSES, MAX_TCP_HOST, TcpTransport, Transport, TransportError, TransportOperation,
 };
 pub use transport::{
     EXT_INFO_CLIENT, EXT_INFO_SERVER, KeyExchangeFamily, NegotiatedTransport, STRICT_KEX_CLIENT,
