@@ -19,8 +19,9 @@ for device and account recipients. The published K-2 known-answer set is exercis
 administrator recovery verification code. S3 remains incomplete while pairing is unimplemented.
 The `scoplen-ssh` crate exposes K-7's ordered algorithm policy, role-specific offers, strict key
 exchange state, a bounded direct TCP byte transport, and engine-independent authentication
-boundaries. `TcpTransport` limits host resolution, applies one total connect timeout, and enables
-`TCP_NODELAY`; `Socks5Transport` and `HttpConnectTransport` add bounded no-auth SOCKS5 and HTTP
+boundaries. `TcpTransport` limits host resolution, uses bounded RFC 8305 style staggered Happy
+Eyeballs attempts under one total connect timeout, and enables `TCP_NODELAY`; its synchronous
+boundary cancels and joins all async attempts before returning. `Socks5Transport` and `HttpConnectTransport` add bounded no-auth SOCKS5 and HTTP
 CONNECT proxy composition with handshake-only socket timeouts. The transports do not perform SSH
 negotiation or authentication. Software Ed25519, P-256, and
 RSA/SHA-2 signers, FIDO2 security-key hooks, RFC 4252 `none`, password and keyboard-interactive

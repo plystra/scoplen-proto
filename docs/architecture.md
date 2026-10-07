@@ -24,7 +24,9 @@ preference present in each peer list, and enables RFC 8308 and strict-KEX marker
 roles advertise them. `StrictKeyExchange` enforces the initial KEXINIT-first rule, KEX-family
 message admission, one-message limits, sequence-wrap refusal, and sequence-number reset after
 NEWKEYS. `TcpTransport` provides a bounded direct TCP byte stream with capped resolution results,
-one total connect timeout, `TCP_NODELAY`, typed read/write failures, and `Read`/`Write` adapters.
+RFC 8305 style staggered Happy Eyeballs attempts, one total connect timeout, `TCP_NODELAY`, typed
+read/write failures, and `Read`/`Write` adapters. Attempts run in one bounded runtime and are
+cancelled and joined before return, so a successful address is not held up by a slower candidate.
 It intentionally stops before SSH version exchange, key exchange, authentication, or channel
 scheduling. The engine-independent authentication boundary supplies Ed25519, P-256, and RSA/SHA-2
 `Signer` adapters, FIDO2 `SecurityKeyProvider` adapters, RFC 4252 publickey probes and signed requests,

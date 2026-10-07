@@ -8,7 +8,8 @@
 use std::{
     io::{self, Read, Write},
     net::{Shutdown, SocketAddr, TcpStream, ToSocketAddrs},
-    time::{Duration, Instant},
+    thread,
+    time::Duration,
 };
 
 use thiserror::Error;
@@ -17,6 +18,8 @@ use thiserror::Error;
 pub const MAX_TCP_HOST: usize = 255;
 /// Maximum number of addresses accepted from one DNS resolution.
 pub const MAX_TCP_ADDRESSES: usize = 16;
+/// Delay between starting successive Happy Eyeballs connection attempts.
+pub const DEFAULT_TCP_FALLBACK_DELAY: Duration = Duration::from_millis(250);
 
 /// The operation that produced a typed transport I/O error.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -167,9 +170,9 @@ pub struct TcpTransport {
 impl TcpTransport {
     /// Connect to a host and TCP port with one bounded total timeout.
     ///
-    /// Name resolution is bounded to [`MAX_TCP_ADDRESSES`] results. Each candidate is attempted
-    /// in resolver order with the remaining total timeout, so a slow or unreachable candidate
-    /// cannot multiply the caller's timeout budget.
+    /// Name resolution is bounded to [`MAX_TCP_ADDRESSES`] results. Candidates retain resolver
+    /// order and use staggered Happy Eyeballs attempts under one total timeout, so a slow or
+    /// unreachable candidate cannot multiply the caller's timeout budget.
     ///
     /// # Errors
     ///
@@ -199,7 +202,8 @@ impl TcpTransport {
     /// Connect to one resolved address with a bounded timeout.
     ///
     /// This method is useful when the caller owns DNS resolution or wants a deterministic
-    /// loopback address in a test. It still applies the same socket policy as [`Self::connect`].
+    /// loopback address in a test. It performs one direct blocking attempt and does not schedule
+    /// other candidates; it still applies the same socket policy as [`Self::connect`].
     ///
     /// # Errors
     ///
@@ -217,10 +221,13 @@ impl TcpTransport {
         Self::from_stream(stream)
     }
 
-    /// Connect to a bounded list of already-resolved addresses.
+    /// Connect to a bounded list of already-resolved addresses with Happy Eyeballs scheduling.
     ///
-    /// Addresses are attempted in the supplied order. The timeout is a total budget across all
-    /// candidates, rather than a separate timeout for every address.
+    /// The first candidate starts immediately. Further candidates are started after a bounded
+    /// [`DEFAULT_TCP_FALLBACK_DELAY`] while earlier attempts are still pending. Every attempt
+    /// shares one absolute timeout deadline. Attempts run in one bounded runtime and are
+    /// cancelled and joined before this method returns, so no abandoned connection attempts run
+    /// in the background.
     ///
     /// # Errors
     ///
@@ -231,6 +238,24 @@ impl TcpTransport {
         addresses: &[SocketAddr],
         timeout: Duration,
     ) -> Result<Self, TransportError> {
+        Self::connect_addresses_with_delay(addresses, timeout, DEFAULT_TCP_FALLBACK_DELAY)
+    }
+
+    /// Connect to resolved addresses with an explicit Happy Eyeballs fallback delay.
+    ///
+    /// A zero delay starts all candidates immediately, still subject to
+    /// [`MAX_TCP_ADDRESSES`]. This is useful for deterministic tests and for callers that have
+    /// already applied their own address-family policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same validation, connection, timeout, and socket-configuration errors as
+    /// [`Self::connect_addresses`].
+    pub fn connect_addresses_with_delay(
+        addresses: &[SocketAddr],
+        timeout: Duration,
+        fallback_delay: Duration,
+    ) -> Result<Self, TransportError> {
         validate_timeout(timeout)?;
         if addresses.is_empty() {
             return Err(TransportError::NoAddresses);
@@ -239,19 +264,21 @@ impl TcpTransport {
             return Err(TransportError::AddressLimitExceeded { max: MAX_TCP_ADDRESSES });
         }
 
-        let deadline = Instant::now().checked_add(timeout).ok_or(TransportError::InvalidTimeout)?;
-        let mut last_error = None;
-        for &address in addresses {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(TransportError::ConnectTimeout { address, timeout });
-            }
-            match Self::connect_addr(address, remaining) {
-                Ok(transport) => return Ok(transport),
-                Err(error) => last_error = Some(error),
-            }
-        }
-        Err(last_error.unwrap_or(TransportError::NoAddresses))
+        let candidates = addresses.to_vec();
+        let runtime_thread = thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_io()
+                .enable_time()
+                .build()
+                .map_err(|_| TransportError::Connect {
+                    address: candidates[0],
+                    kind: io::ErrorKind::Other,
+                })?;
+            runtime.block_on(connect_happy_eyeballs(&candidates, timeout, fallback_delay))
+        });
+        runtime_thread.join().unwrap_or_else(|_| {
+            Err(TransportError::Connect { address: addresses[0], kind: io::ErrorKind::Other })
+        })
     }
 
     /// Wrap an already-connected TCP stream and apply the transport socket policy.
@@ -340,6 +367,78 @@ impl Write for TcpTransport {
     }
 }
 
+async fn connect_happy_eyeballs(
+    addresses: &[SocketAddr],
+    timeout: Duration,
+    fallback_delay: Duration,
+) -> Result<TcpTransport, TransportError> {
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let mut attempts = Vec::with_capacity(addresses.len());
+    for (index, &address) in addresses.iter().enumerate() {
+        let sender = sender.clone();
+        let delay = u32::try_from(index)
+            .ok()
+            .and_then(|index| fallback_delay.checked_mul(index))
+            .unwrap_or(timeout);
+        attempts.push(tokio::spawn(async move {
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            let result = tokio::net::TcpStream::connect(address)
+                .await
+                .map_err(|error| {
+                    if error.kind() == io::ErrorKind::TimedOut {
+                        TransportError::ConnectTimeout { address, timeout }
+                    } else {
+                        TransportError::Connect { address, kind: error.kind() }
+                    }
+                })
+                .and_then(|stream| {
+                    let stream = stream.into_std().map_err(|error| TransportError::Configure {
+                        option: "TCP stream mode",
+                        kind: error.kind(),
+                    })?;
+                    stream.set_nonblocking(false).map_err(|error| TransportError::Configure {
+                        option: "TCP blocking mode",
+                        kind: error.kind(),
+                    })?;
+                    Ok(stream)
+                })
+                .and_then(TcpTransport::from_stream);
+            let _ = sender.send((index, result));
+        }));
+    }
+    drop(sender);
+
+    let result = tokio::time::timeout(timeout, async {
+        let mut errors = Vec::with_capacity(addresses.len());
+        errors.resize_with(addresses.len(), || None);
+        while let Some((index, result)) = receiver.recv().await {
+            match result {
+                Ok(transport) => return Ok(transport),
+                Err(error) => errors[index] = Some(error),
+            }
+        }
+        errors
+            .into_iter()
+            .rev()
+            .flatten()
+            .next()
+            .map_or_else(|| Err(TransportError::NoAddresses), Err)
+    })
+    .await;
+
+    for attempt in attempts {
+        attempt.abort();
+        let _ = attempt.await;
+    }
+
+    match result {
+        Ok(result) => result,
+        Err(_) => Err(TransportError::ConnectTimeout { address: addresses[0], timeout }),
+    }
+}
+
 fn validate_host(host: &str) -> Result<(), TransportError> {
     if host.is_empty() {
         return Err(TransportError::EmptyHost);
@@ -415,6 +514,44 @@ mod tests {
             other => panic!("unexpected connection failure: {other:?}"),
         };
         assert_eq!(actual, address);
+    }
+
+    #[test]
+    fn happy_eyeballs_falls_back_from_ipv6_to_ipv4() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind listener");
+        let address = listener.local_addr().expect("listener address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept connection");
+            stream.write_all(b"ok").expect("write response");
+        });
+
+        let ipv6_candidate = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], address.port()));
+        let mut transport = TcpTransport::connect_addresses_with_delay(
+            &[ipv6_candidate, address],
+            Duration::from_secs(2),
+            Duration::from_millis(20),
+        )
+        .expect("fall back to IPv4 listener");
+        let mut response = [0; 2];
+        transport.read_exact(&mut response).expect("read response");
+        assert_eq!(&response, b"ok");
+        server.join().expect("server thread");
+    }
+
+    #[test]
+    fn happy_eyeballs_timeout_is_typed_and_bounded() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind listener");
+        let address = listener.local_addr().expect("listener address");
+        drop(listener);
+        let started = std::time::Instant::now();
+        let error = TcpTransport::connect_addresses_with_delay(
+            &[address, address],
+            Duration::from_millis(100),
+            Duration::from_secs(1),
+        )
+        .expect_err("closed listener and delayed candidate must time out");
+        assert!(matches!(error, TransportError::ConnectTimeout { .. }));
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]
