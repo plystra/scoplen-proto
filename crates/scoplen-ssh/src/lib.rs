@@ -67,8 +67,9 @@ pub use process::{
     ProxyCommandError, ProxyCommandTransport,
 };
 pub use proxy::{
-    HttpConnectTransport, MAX_HTTP_CONNECT_RESPONSE, MAX_PROXY_HOST, ProxyError, ProxyOperation,
-    ProxyProtocol, ProxyTransportError, Socks5Transport,
+    HttpConnectTransport, MAX_HTTP_CONNECT_RESPONSE, MAX_PROXY_CREDENTIAL, MAX_PROXY_HOST,
+    ProxyCredentials, ProxyError, ProxyOperation, ProxyProtocol, ProxyTransportError,
+    Socks5Transport,
 };
 pub use russh_adapter::{
     ChannelEvent, ClientChannel, ClientChannelStream, ClientConfig, ClientConnection, ClientError,
