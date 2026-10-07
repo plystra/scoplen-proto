@@ -27,6 +27,9 @@ All notable changes to `scoplen-proto` will be recorded here.
   `sk-ssh-ed25519@openssh.com` and `sk-ecdsa-sha2-nistp256@openssh.com` public-key and signature
   codecs, RFC 4252 session binding, application scoping, authenticator flags and counters, and
   malformed-input and requirement failure tests.
+- Integrated the bounded SOCKS5 and HTTP CONNECT transports with the concrete async SSH client,
+  including real in-process SSH round trips and typed proxy rejection, authentication-downgrade,
+  and timeout failure paths.
 - Added the bounded K-7 SSH agent request-identities and sign request/response codecs, a
   transport-neutral agent client, and server dispatch with opaque failure mapping and loopback
   and malformed-frame tests. Platform channels, forwarding, and the remaining agent protocol
