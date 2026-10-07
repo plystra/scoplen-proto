@@ -495,6 +495,37 @@ impl<S: Read + Write> AgentChannel for FramedAgentChannel<S> {
     }
 }
 
+/// Pageant's current Windows named-pipe transport, which carries the standard SSH agent frames.
+///
+/// Recent Pageant releases expose a pipe path through their OpenSSH configuration output. The
+/// adapter deliberately accepts that path from the caller rather than guessing a per-user pipe
+/// name: `PuTTY` derives the name from Windows-protected state, and reproducing that derivation
+/// would require unsafe platform FFI. The byte-level protocol remains the same bounded framing
+/// used by Unix sockets and ordinary Windows OpenSSH agent pipes.
+pub struct PageantAgentChannel<S> {
+    inner: FramedAgentChannel<S>,
+}
+
+impl<S> PageantAgentChannel<S> {
+    /// Wrap a stream connected to a Pageant named pipe.
+    #[must_use]
+    pub fn new(stream: S) -> Self {
+        Self { inner: FramedAgentChannel::new(stream) }
+    }
+
+    /// Return the wrapped Pageant stream.
+    #[must_use]
+    pub fn into_inner(self) -> S {
+        self.inner.into_inner()
+    }
+}
+
+impl<S: Read + Write> AgentChannel for PageantAgentChannel<S> {
+    fn exchange(&mut self, request: &[u8]) -> Result<Vec<u8>, AgentError> {
+        self.inner.exchange(request)
+    }
+}
+
 /// Connect to an OpenSSH agent through a Unix-domain socket.
 #[cfg(unix)]
 pub fn connect_unix_agent(
@@ -511,6 +542,15 @@ pub fn connect_windows_agent(
 ) -> std::io::Result<AgentClient<FramedAgentChannel<std::fs::File>>> {
     let stream = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
     Ok(AgentClient::new(FramedAgentChannel::new(stream)))
+}
+
+/// Connect to a Pageant named pipe using its path from the generated OpenSSH configuration.
+#[cfg(windows)]
+pub fn connect_pageant_agent(
+    path: impl AsRef<std::path::Path>,
+) -> std::io::Result<AgentClient<PageantAgentChannel<std::fs::File>>> {
+    let stream = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
+    Ok(AgentClient::new(PageantAgentChannel::new(stream)))
 }
 
 /// SSH agent client operations shared by Unix, Windows, and Pageant adapters.
@@ -1777,6 +1817,40 @@ mod tests {
         let mut channel = FramedAgentChannel::new(ScriptedStream::new(oversized, 4));
         let request = AgentMessage::RequestIdentities.encode_frame().expect("request");
         assert_eq!(channel.exchange(&request), Err(AgentError::FrameTooLarge));
+    }
+
+    #[test]
+    fn pageant_channel_handles_fragmented_response_and_preserves_agent_wire() {
+        let response = AgentMessage::IdentitiesAnswer {
+            identities: vec![AgentIdentity::new(KEY, b"work key").expect("identity")],
+        }
+        .encode_frame()
+        .expect("response");
+        let stream = ScriptedStream::new(response, 1);
+        let mut client = AgentClient::new(PageantAgentChannel::new(stream));
+        assert_eq!(client.identities().expect("identities").len(), 1);
+
+        let stream = client.into_inner().into_inner();
+        assert_eq!(
+            AgentMessage::decode_frame(&stream.written).expect("request"),
+            AgentMessage::RequestIdentities
+        );
+    }
+
+    #[test]
+    fn pageant_channel_rejects_malformed_and_oversized_responses() {
+        let request = AgentMessage::RequestIdentities.encode_frame().expect("request");
+
+        let mut malformed = PageantAgentChannel::new(ScriptedStream::new(vec![0; 4], 1));
+        assert_eq!(
+            malformed.exchange(&request),
+            Err(AgentError::MalformedFrame("empty agent payload"))
+        );
+
+        let oversized =
+            (u32::try_from(MAX_AGENT_FRAME).expect("test limit") + 1).to_be_bytes().to_vec();
+        let mut oversized = PageantAgentChannel::new(ScriptedStream::new(oversized, 1));
+        assert_eq!(oversized.exchange(&request), Err(AgentError::FrameTooLarge));
     }
 
     #[test]
