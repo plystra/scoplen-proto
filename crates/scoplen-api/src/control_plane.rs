@@ -9,6 +9,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Canonical Cedar entity/action schema for the control plane.
+pub const CEDAR_SCHEMA: &str = include_str!("../cedar/schema.cedarschema");
+
+/// Built-in role policies evaluated by the control plane.
+pub const BUILT_IN_POLICIES: &str = include_str!("../cedar/built-in-policies.cedar");
+
 /// A control-plane resource envelope.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Resource {
@@ -120,7 +126,9 @@ pub struct ProblemDetails {
 
 #[cfg(test)]
 mod tests {
-    use super::{ListQuery, Page, ProblemDetails, QueryError, Resource};
+    use super::{
+        BUILT_IN_POLICIES, CEDAR_SCHEMA, ListQuery, Page, ProblemDetails, QueryError, Resource,
+    };
     use serde_json::json;
 
     #[test]
@@ -155,5 +163,25 @@ mod tests {
         }))
         .expect("problem");
         assert_eq!(problem.extensions["x_trace"], "kept");
+    }
+
+    #[test]
+    fn cedar_contract_contains_every_documented_action_and_role() {
+        for marker in [
+            "entity Account",
+            "entity Device",
+            "entity Host",
+            "entity Organization",
+            "action connect",
+            "action request_access",
+            "action approve_access",
+            "action manage_inventory",
+            "action view_audit",
+        ] {
+            assert!(CEDAR_SCHEMA.contains(marker), "missing Cedar marker: {marker}");
+        }
+        for role in ["owner", "administrator", "security_auditor", "approver", "member"] {
+            assert!(BUILT_IN_POLICIES.contains(role), "missing built-in role: {role}");
+        }
     }
 }

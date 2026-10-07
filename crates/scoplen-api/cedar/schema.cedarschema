@@ -1,0 +1,65 @@
+// SPDX-License-Identifier: Apache-2.0
+// Canonical Cedar schema for the control-plane authorization boundary.
+
+entity Account {
+    email: String,
+    groups: Set<Group>,
+    status: String,
+};
+entity Group {
+    name: String,
+    source: String,
+};
+entity Device {
+    account: Account,
+    platform: String,
+    hardware_backed: Bool,
+    enrolled_at: Long,
+};
+entity Host {
+    labels: Set<String>,
+    host_groups: Set<HostGroup>,
+    gateway_network: GatewayNetwork,
+};
+entity HostGroup {
+    name: String,
+    parents: Set<HostGroup>,
+};
+entity GatewayNetwork {
+    name: String,
+};
+entity Organization {
+    name: String,
+};
+entity AccessRequest {
+    requester: Account,
+    resource: Host,
+};
+entity Session {
+    host: Host,
+    account: Account,
+};
+
+action connect appliesTo {
+    principal: Account,
+    resource: Host,
+    context: {
+        remote_user: String,
+        route_kind: String,
+        device: Device,
+        sso_age_seconds: Long,
+        now: Long,
+        source_ip: String,
+    },
+};
+action request_access appliesTo { principal: Account, resource: Host, context: { duration_seconds: Long, reason: String } };
+action approve_access appliesTo { principal: Account, resource: AccessRequest, context: { requester: Account, resource: Host } };
+action view_recording appliesTo { principal: Account, resource: Session, context: { host: Host, account: Account } };
+action monitor_session appliesTo { principal: Account, resource: Session, context: { host: Host, account: Account } };
+action terminate_session appliesTo { principal: Account, resource: Session, context: { host: Host, account: Account } };
+action manage_inventory appliesTo { principal: Account, resource: Organization, context: { now: Long } };
+action manage_policy appliesTo { principal: Account, resource: Organization, context: { now: Long } };
+action manage_members appliesTo { principal: Account, resource: Organization, context: { now: Long } };
+action manage_ca appliesTo { principal: Account, resource: Organization, context: { now: Long } };
+action manage_gateways appliesTo { principal: Account, resource: Organization, context: { now: Long } };
+action view_audit appliesTo { principal: Account, resource: Organization, context: { now: Long } };

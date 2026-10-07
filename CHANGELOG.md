@@ -12,6 +12,8 @@ All notable changes to `scoplen-proto` will be recorded here.
   generated Rust envelopes and bounds-checked query types, and the `@scoplen/api` TypeScript
   package surface. The document includes DPoP authentication, ETags, idempotency, pagination,
   RFC 9457 errors, binary KRL and recording responses, and WebSocket session monitoring.
+- Added the canonical K-5 Cedar entity/action schema and built-in Owner, Administrator, Security
+  auditor, Approver, and Member policy source, with contract marker coverage in `scoplen-api`.
 - Added the Rust workspace baseline and shared known-answer vector loader (roadmap S1).
 - Added the deterministic K-1 object model: strict CBOR, UUIDv7/HLC clocks, typed envelopes,
   tombstones, limits, merge algebra, and orphan detection (roadmap S2).
