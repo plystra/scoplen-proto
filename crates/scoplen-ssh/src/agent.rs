@@ -21,12 +21,19 @@ const SIGN_REQUEST: u8 = 13;
 const SIGN_RESPONSE: u8 = 14;
 const FAILURE: u8 = 5;
 const SUCCESS: u8 = 6;
+const ADD_IDENTITY: u8 = 17;
 const REMOVE_IDENTITY: u8 = 18;
 const REMOVE_ALL_IDENTITIES: u8 = 19;
 const ADD_SMARTCARD_KEY: u8 = 20;
 const REMOVE_SMARTCARD_KEY: u8 = 21;
 const LOCK: u8 = 22;
 const UNLOCK: u8 = 23;
+const ADD_IDENTITY_CONSTRAINED: u8 = 25;
+
+const CONSTRAIN_LIFETIME: u8 = 1;
+const CONSTRAIN_CONFIRM: u8 = 2;
+const CONSTRAIN_MAXSIGN: u8 = 3;
+const CONSTRAIN_EXTENSION: u8 = 255;
 
 /// Maximum complete SSH agent payload, excluding the four-byte frame length.
 pub const MAX_AGENT_FRAME: usize = 256 * 1024;
@@ -42,6 +49,14 @@ pub const MAX_AGENT_IDENTITIES: usize = 1024;
 pub const MAX_AGENT_PASSPHRASE: usize = 4096;
 /// Maximum provider name accepted by smart-card management requests.
 pub const MAX_AGENT_PROVIDER: usize = 4096;
+/// Maximum encoded private-key data accepted by add-identity requests.
+pub const MAX_AGENT_PRIVATE_KEY: usize = 128 * 1024;
+/// Maximum number of constraints accepted on one added identity.
+pub const MAX_AGENT_CONSTRAINTS: usize = 256;
+/// Maximum extension name accepted by an identity constraint.
+pub const MAX_AGENT_EXTENSION_NAME: usize = 4096;
+/// Maximum extension details accepted by an identity constraint.
+pub const MAX_AGENT_EXTENSION_DETAILS: usize = 64 * 1024;
 /// OpenSSH requests an RSA SHA-256 signature when this flag is set.
 pub const AGENT_SIGN_FLAG_RSA_SHA2_256: u32 = 2;
 /// OpenSSH requests an RSA SHA-512 signature when this flag is set.
@@ -74,6 +89,67 @@ pub enum AgentError {
     /// The backing key store failed while serving an agent request.
     #[error("SSH agent key store failed: {0}")]
     KeyStore(String),
+}
+
+/// Opaque, zeroizing SSH private-key data for an add-identity request.
+///
+/// The bytes use the standard SSH agent key-data encoding (the algorithm name and its
+/// algorithm-specific fields, without the trailing comment). The boundary validates the
+/// supported field layout and total size, but never parses or logs private scalar values.
+#[derive(Clone, Eq, PartialEq)]
+pub struct AgentPrivateKey(SecretVec);
+
+impl AgentPrivateKey {
+    /// Construct bounded standard SSH agent private-key data.
+    pub fn new(encoded: impl Into<Vec<u8>>) -> Result<Self, AgentError> {
+        let encoded = encoded.into();
+        validate_private_key_data(&encoded)?;
+        Ok(Self(SecretVec::new(encoded)))
+    }
+
+    /// Borrow the encoded key data for a key-store operation.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+impl fmt::Debug for AgentPrivateKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_struct("AgentPrivateKey").field("encoded_len", &self.0.len()).finish()
+    }
+}
+
+/// A bounded SSH agent identity constraint.
+#[derive(Clone, Eq, PartialEq)]
+pub enum AgentConstraint {
+    /// Expire the identity after the specified number of seconds.
+    Lifetime { seconds: u32 },
+    /// Require user confirmation for each signature.
+    Confirm,
+    /// Allow at most the specified number of signatures.
+    MaxSignatures { count: u32 },
+    /// Carry a bounded extension understood by the receiving agent.
+    Extension { name: Vec<u8>, details: Vec<u8> },
+}
+
+impl fmt::Debug for AgentConstraint {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Lifetime { seconds } => {
+                formatter.debug_struct("Lifetime").field("seconds", seconds).finish()
+            }
+            Self::Confirm => formatter.write_str("Confirm"),
+            Self::MaxSignatures { count } => {
+                formatter.debug_struct("MaxSignatures").field("count", count).finish()
+            }
+            Self::Extension { name, details } => formatter
+                .debug_struct("Extension")
+                .field("name_len", &name.len())
+                .field("details_len", &details.len())
+                .finish(),
+        }
+    }
 }
 
 /// One public key and its agent display comment.
@@ -120,6 +196,14 @@ pub enum AgentMessage {
     IdentitiesAnswer { identities: Vec<AgentIdentity> },
     /// Return an SSH signature blob.
     SignResponse { signature: Vec<u8> },
+    /// Add one software identity without constraints.
+    AddIdentity { private_key: AgentPrivateKey, comment: Vec<u8> },
+    /// Add one software identity with bounded standard agent constraints.
+    AddIdentityConstrained {
+        private_key: AgentPrivateKey,
+        comment: Vec<u8>,
+        constraints: Vec<AgentConstraint>,
+    },
     /// Remove every identity currently held by the agent.
     RemoveAllIdentities,
     /// Load keys from a smart-card provider.
@@ -155,6 +239,17 @@ impl fmt::Debug for AgentMessage {
             Self::SignResponse { signature } => formatter
                 .debug_struct("SignResponse")
                 .field("signature_len", &signature.len())
+                .finish(),
+            Self::AddIdentity { private_key, comment } => formatter
+                .debug_struct("AddIdentity")
+                .field("private_key", private_key)
+                .field("comment_len", &comment.len())
+                .finish(),
+            Self::AddIdentityConstrained { private_key, comment, constraints } => formatter
+                .debug_struct("AddIdentityConstrained")
+                .field("private_key", private_key)
+                .field("comment_len", &comment.len())
+                .field("constraint_count", &constraints.len())
                 .finish(),
             Self::RemoveIdentity { key_blob } => formatter
                 .debug_struct("RemoveIdentity")
@@ -253,6 +348,20 @@ impl AgentMessage {
                 validate_blob(signature, MAX_AGENT_KEY_BLOB, "signature")?;
                 payload.push(SIGN_RESPONSE);
                 append_string(&mut payload, signature, MAX_AGENT_KEY_BLOB, "signature")?;
+            }
+            Self::AddIdentity { private_key, comment } => {
+                validate_comment(comment)?;
+                payload.push(ADD_IDENTITY);
+                append_private_key(&mut payload, private_key)?;
+                append_string(&mut payload, comment, MAX_AGENT_COMMENT, "comment")?;
+            }
+            Self::AddIdentityConstrained { private_key, comment, constraints } => {
+                validate_comment(comment)?;
+                validate_constraints(constraints, true)?;
+                payload.push(ADD_IDENTITY_CONSTRAINED);
+                append_private_key(&mut payload, private_key)?;
+                append_string(&mut payload, comment, MAX_AGENT_COMMENT, "comment")?;
+                append_constraints(&mut payload, constraints)?;
             }
             Self::RemoveIdentity { key_blob } => {
                 validate_blob(key_blob, MAX_AGENT_KEY_BLOB, "key blob")?;
@@ -462,6 +571,35 @@ impl<C: AgentChannel> AgentClient<C> {
         }
     }
 
+    /// Add one software identity without constraints.
+    pub fn add_identity(
+        &mut self,
+        private_key: &AgentPrivateKey,
+        comment: &[u8],
+    ) -> Result<(), AgentError> {
+        validate_comment(comment)?;
+        self.expect_success(&AgentMessage::AddIdentity {
+            private_key: private_key.clone(),
+            comment: comment.to_vec(),
+        })
+    }
+
+    /// Add one software identity with bounded standard agent constraints.
+    pub fn add_identity_constrained(
+        &mut self,
+        private_key: &AgentPrivateKey,
+        comment: &[u8],
+        constraints: &[AgentConstraint],
+    ) -> Result<(), AgentError> {
+        validate_comment(comment)?;
+        validate_constraints(constraints, true)?;
+        self.expect_success(&AgentMessage::AddIdentityConstrained {
+            private_key: private_key.clone(),
+            comment: comment.to_vec(),
+            constraints: constraints.to_vec(),
+        })
+    }
+
     /// Remove every identity currently held by the agent.
     pub fn remove_all_identities(&mut self) -> Result<(), AgentError> {
         self.expect_success(&AgentMessage::RemoveAllIdentities)
@@ -539,6 +677,16 @@ pub trait AgentKeyStore {
     /// Sign data for a key that exactly matches one stored identity.
     fn sign(&self, key_blob: &[u8], data: &[u8], flags: u32) -> Result<Vec<u8>, AgentError>;
 
+    /// Add one private identity and its optional bounded constraints.
+    fn add_identity(
+        &self,
+        _private_key: &AgentPrivateKey,
+        _comment: &[u8],
+        _constraints: &[AgentConstraint],
+    ) -> Result<(), AgentError> {
+        Err(AgentError::AgentFailure)
+    }
+
     /// Remove every identity currently held by the store.
     fn remove_all_identities(&self) -> Result<(), AgentError> {
         Err(AgentError::AgentFailure)
@@ -597,6 +745,18 @@ impl<S: AgentKeyStore> AgentServer<S> {
             AgentMessage::SignRequest { key_blob, data, flags } => {
                 match self.store.sign(&key_blob, &data, flags) {
                     Ok(signature) => AgentMessage::SignResponse { signature },
+                    Err(_) => AgentMessage::Failure,
+                }
+            }
+            AgentMessage::AddIdentity { private_key, comment } => {
+                match self.store.add_identity(&private_key, &comment, &[]) {
+                    Ok(()) => AgentMessage::Success,
+                    Err(_) => AgentMessage::Failure,
+                }
+            }
+            AgentMessage::AddIdentityConstrained { private_key, comment, constraints } => {
+                match self.store.add_identity(&private_key, &comment, &constraints) {
+                    Ok(()) => AgentMessage::Success,
                     Err(_) => AgentMessage::Failure,
                 }
             }
@@ -742,6 +902,7 @@ fn decode_payload(payload: &[u8]) -> Result<AgentMessage, AgentError> {
             validate_blob(signature, MAX_AGENT_KEY_BLOB, "signature")?;
             Ok(AgentMessage::SignResponse { signature: signature.to_vec() })
         }
+        ADD_IDENTITY => decode_add_identity(rest, false),
         REMOVE_IDENTITY => {
             let (key_blob, trailing) = read_string(rest, MAX_AGENT_KEY_BLOB, "key blob")?;
             if !trailing.is_empty() {
@@ -754,6 +915,7 @@ fn decode_payload(payload: &[u8]) -> Result<AgentMessage, AgentError> {
         REMOVE_ALL_IDENTITIES => Err(AgentError::MalformedFrame("remove all identities payload")),
         ADD_SMARTCARD_KEY => decode_add_smartcard_key(rest),
         REMOVE_SMARTCARD_KEY => decode_remove_smartcard_key(rest),
+        ADD_IDENTITY_CONSTRAINED => decode_add_identity(rest, true),
         LOCK => {
             let (passphrase, trailing) = read_string(rest, MAX_AGENT_PASSPHRASE, "passphrase")?;
             if !trailing.is_empty() {
@@ -773,6 +935,30 @@ fn decode_payload(payload: &[u8]) -> Result<AgentMessage, AgentError> {
         FAILURE if rest.is_empty() => Ok(AgentMessage::Failure),
         FAILURE => Err(AgentError::MalformedFrame("failure payload")),
         other => Err(AgentError::UnsupportedMessage(other)),
+    }
+}
+
+fn decode_add_identity(input: &[u8], constrained: bool) -> Result<AgentMessage, AgentError> {
+    let (private_key, rest) = read_private_key(input)?;
+    let (comment, rest) = read_string(rest, MAX_AGENT_COMMENT, "comment")?;
+    validate_comment(comment)?;
+    let constraints = if constrained {
+        decode_constraints(rest)?
+    } else {
+        if !rest.is_empty() {
+            return Err(AgentError::MalformedFrame("add identity trailing data"));
+        }
+        Vec::new()
+    };
+    let private_key = AgentPrivateKey::new(private_key.to_vec())?;
+    if constrained {
+        Ok(AgentMessage::AddIdentityConstrained {
+            private_key,
+            comment: comment.to_vec(),
+            constraints,
+        })
+    } else {
+        Ok(AgentMessage::AddIdentity { private_key, comment: comment.to_vec() })
     }
 }
 
@@ -799,6 +985,156 @@ fn decode_remove_smartcard_key(rest: &[u8]) -> Result<AgentMessage, AgentError> 
         return Err(AgentError::MalformedFrame("smart-card remove trailing data"));
     }
     Ok(AgentMessage::RemoveSmartcardKey { provider: provider.to_vec(), flags })
+}
+
+fn append_private_key(
+    output: &mut Vec<u8>,
+    private_key: &AgentPrivateKey,
+) -> Result<(), AgentError> {
+    validate_private_key_data(private_key.as_bytes())?;
+    output.extend_from_slice(private_key.as_bytes());
+    Ok(())
+}
+
+fn read_private_key(input: &[u8]) -> Result<(&[u8], &[u8]), AgentError> {
+    let key_data_len = private_key_data_len(input)?;
+    let (key_data, rest) = input
+        .split_at_checked(key_data_len)
+        .ok_or(AgentError::MalformedFrame("truncated private key data"))?;
+    Ok((key_data, rest))
+}
+
+fn validate_private_key_data(encoded: &[u8]) -> Result<(), AgentError> {
+    let key_data_len = private_key_data_len(encoded)?;
+    if key_data_len != encoded.len() {
+        return Err(AgentError::MalformedFrame("private key trailing data"));
+    }
+    Ok(())
+}
+
+fn private_key_data_len(encoded: &[u8]) -> Result<usize, AgentError> {
+    let (algorithm, mut rest) = read_string(encoded, MAX_AGENT_KEY_BLOB, "private key algorithm")?;
+    validate_blob(algorithm, MAX_AGENT_KEY_BLOB, "private key algorithm")?;
+
+    match algorithm {
+        b"ssh-rsa" => consume_fields(&mut rest, 6, "private key field")?,
+        b"ssh-dss" => consume_fields(&mut rest, 5, "private key field")?,
+        b"ecdsa-sha2-nistp256" | b"ecdsa-sha2-nistp384" | b"ecdsa-sha2-nistp521" => {
+            consume_fields(&mut rest, 3, "private key field")?;
+        }
+        b"ssh-ed25519" => consume_fields(&mut rest, 2, "private key field")?,
+        _ => return Err(AgentError::MalformedFrame("unsupported private key algorithm")),
+    }
+
+    let key_data_len = encoded.len() - rest.len();
+    validate_size(&encoded[..key_data_len], MAX_AGENT_PRIVATE_KEY, "private key")?;
+    Ok(key_data_len)
+}
+
+fn consume_fields(input: &mut &[u8], count: usize, field: &'static str) -> Result<(), AgentError> {
+    for _ in 0..count {
+        let (_, rest) = read_string(input, MAX_AGENT_KEY_BLOB, field)?;
+        *input = rest;
+    }
+    Ok(())
+}
+
+fn validate_comment(comment: &[u8]) -> Result<(), AgentError> {
+    validate_size(comment, MAX_AGENT_COMMENT, "comment")
+}
+
+fn validate_constraints(
+    constraints: &[AgentConstraint],
+    require_one: bool,
+) -> Result<(), AgentError> {
+    if constraints.len() > MAX_AGENT_CONSTRAINTS {
+        return Err(AgentError::FieldTooLarge("identity constraint count"));
+    }
+    if require_one && constraints.is_empty() {
+        return Err(AgentError::MalformedFrame("identity constraints"));
+    }
+    for constraint in constraints {
+        if let AgentConstraint::Extension { name, details } = constraint {
+            validate_blob(name, MAX_AGENT_EXTENSION_NAME, "identity extension name")?;
+            validate_size(details, MAX_AGENT_EXTENSION_DETAILS, "identity extension details")?;
+        }
+    }
+    Ok(())
+}
+
+fn append_constraints(
+    output: &mut Vec<u8>,
+    constraints: &[AgentConstraint],
+) -> Result<(), AgentError> {
+    validate_constraints(constraints, true)?;
+    for constraint in constraints {
+        match constraint {
+            AgentConstraint::Lifetime { seconds } => {
+                output.push(CONSTRAIN_LIFETIME);
+                output.extend_from_slice(&seconds.to_be_bytes());
+            }
+            AgentConstraint::Confirm => output.push(CONSTRAIN_CONFIRM),
+            AgentConstraint::MaxSignatures { count } => {
+                output.push(CONSTRAIN_MAXSIGN);
+                output.extend_from_slice(&count.to_be_bytes());
+            }
+            AgentConstraint::Extension { name, details } => {
+                output.push(CONSTRAIN_EXTENSION);
+                append_string(output, name, MAX_AGENT_EXTENSION_NAME, "identity extension name")?;
+                append_string(
+                    output,
+                    details,
+                    MAX_AGENT_EXTENSION_DETAILS,
+                    "identity extension details",
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn decode_constraints(input: &[u8]) -> Result<Vec<AgentConstraint>, AgentError> {
+    if input.is_empty() {
+        return Err(AgentError::MalformedFrame("identity constraints"));
+    }
+    let mut rest = input;
+    let mut constraints = Vec::new();
+    while !rest.is_empty() {
+        if constraints.len() == MAX_AGENT_CONSTRAINTS {
+            return Err(AgentError::FieldTooLarge("identity constraint count"));
+        }
+        let constraint_type = rest[0];
+        rest = &rest[1..];
+        let constraint = match constraint_type {
+            CONSTRAIN_LIFETIME => {
+                let seconds = read_u32(rest, "identity lifetime")?;
+                rest = &rest[4..];
+                AgentConstraint::Lifetime { seconds }
+            }
+            CONSTRAIN_CONFIRM => AgentConstraint::Confirm,
+            CONSTRAIN_MAXSIGN => {
+                let count = read_u32(rest, "identity max signatures")?;
+                rest = &rest[4..];
+                AgentConstraint::MaxSignatures { count }
+            }
+            CONSTRAIN_EXTENSION => {
+                let (name, remaining) =
+                    read_string(rest, MAX_AGENT_EXTENSION_NAME, "identity extension name")?;
+                validate_blob(name, MAX_AGENT_EXTENSION_NAME, "identity extension name")?;
+                let (details, remaining) = read_string(
+                    remaining,
+                    MAX_AGENT_EXTENSION_DETAILS,
+                    "identity extension details",
+                )?;
+                rest = remaining;
+                AgentConstraint::Extension { name: name.to_vec(), details: details.to_vec() }
+            }
+            _ => return Err(AgentError::MalformedFrame("unsupported identity constraint")),
+        };
+        constraints.push(constraint);
+    }
+    validate_constraints(&constraints, true)?;
+    Ok(constraints)
 }
 
 fn read_stream_frame<T: Read>(stream: &mut T) -> Result<Option<Vec<u8>>, AgentError> {
@@ -898,6 +1234,25 @@ mod tests {
                 return Err(AgentError::AgentFailure);
             }
             Ok(self.signature.clone())
+        }
+
+        fn add_identity(
+            &self,
+            private_key: &AgentPrivateKey,
+            comment: &[u8],
+            constraints: &[AgentConstraint],
+        ) -> Result<(), AgentError> {
+            let expected = ed25519_private_key();
+            if private_key == &expected
+                && comment == b"added key"
+                && (constraints.is_empty()
+                    || constraints
+                        == [AgentConstraint::Lifetime { seconds: 60 }, AgentConstraint::Confirm])
+            {
+                Ok(())
+            } else {
+                Err(AgentError::AgentFailure)
+            }
         }
 
         fn remove_all_identities(&self) -> Result<(), AgentError> {
@@ -1006,6 +1361,19 @@ mod tests {
         }
     }
 
+    fn append_test_string(output: &mut Vec<u8>, value: &[u8]) {
+        output.extend_from_slice(&(u32::try_from(value.len()).expect("test length")).to_be_bytes());
+        output.extend_from_slice(value);
+    }
+
+    fn ed25519_private_key() -> AgentPrivateKey {
+        let mut encoded = Vec::new();
+        append_test_string(&mut encoded, b"ssh-ed25519");
+        append_test_string(&mut encoded, &[7; 32]);
+        append_test_string(&mut encoded, &[8; 64]);
+        AgentPrivateKey::new(encoded).expect("private key")
+    }
+
     #[test]
     fn server_serves_fragmented_requests_until_peer_closes() {
         let store = Store {
@@ -1094,6 +1462,23 @@ mod tests {
                 identities: vec![AgentIdentity::new(KEY, b"work key").expect("identity")],
             },
             AgentMessage::SignResponse { signature: b"signature".to_vec() },
+            AgentMessage::AddIdentity {
+                private_key: ed25519_private_key(),
+                comment: b"added key".to_vec(),
+            },
+            AgentMessage::AddIdentityConstrained {
+                private_key: ed25519_private_key(),
+                comment: b"added key".to_vec(),
+                constraints: vec![
+                    AgentConstraint::Lifetime { seconds: 60 },
+                    AgentConstraint::Confirm,
+                    AgentConstraint::MaxSignatures { count: 3 },
+                    AgentConstraint::Extension {
+                        name: b"example@openssh.com".to_vec(),
+                        details: b"opaque details".to_vec(),
+                    },
+                ],
+            },
             AgentMessage::RemoveIdentity { key_blob: KEY.to_vec() },
             AgentMessage::RemoveAllIdentities,
             AgentMessage::AddSmartcardKey {
@@ -1125,6 +1510,15 @@ mod tests {
             client.sign(KEY, b"payload", AGENT_SIGN_FLAG_RSA_SHA2_512).expect("signature"),
             b"signed payload"
         );
+        let private_key = ed25519_private_key();
+        client.add_identity(&private_key, b"added key").expect("add identity");
+        client
+            .add_identity_constrained(
+                &private_key,
+                b"added key",
+                &[AgentConstraint::Lifetime { seconds: 60 }, AgentConstraint::Confirm],
+            )
+            .expect("add constrained identity");
         client.remove_all_identities().expect("remove all");
         client.remove_identity(KEY).expect("remove identity");
         client.add_smartcard_key(b"provider", b"pin", 7).expect("smart-card add");
@@ -1213,10 +1607,47 @@ mod tests {
                 .collect(),
         };
         assert_eq!(too_many.encode_frame(), Err(AgentError::FieldTooLarge("identity count")));
+
+        let private_key = ed25519_private_key();
+        let mut payload = vec![ADD_IDENTITY_CONSTRAINED];
+        payload.extend_from_slice(private_key.as_bytes());
+        append_test_string(&mut payload, b"comment");
+        payload.push(0x7f);
+        let mut frame = (u32::try_from(payload.len()).expect("test frame")).to_be_bytes().to_vec();
+        frame.extend_from_slice(&payload);
+        assert_eq!(
+            AgentMessage::decode_frame(&frame),
+            Err(AgentError::MalformedFrame("unsupported identity constraint"))
+        );
+    }
+
+    #[test]
+    fn private_key_parser_accepts_standard_software_key_layouts() {
+        for (algorithm, field_count) in [
+            (b"ssh-rsa".as_slice(), 6),
+            (b"ssh-dss".as_slice(), 5),
+            (b"ecdsa-sha2-nistp256".as_slice(), 3),
+            (b"ecdsa-sha2-nistp384".as_slice(), 3),
+            (b"ecdsa-sha2-nistp521".as_slice(), 3),
+            (b"ssh-ed25519".as_slice(), 2),
+        ] {
+            let mut encoded = Vec::new();
+            append_test_string(&mut encoded, algorithm);
+            for _ in 0..field_count {
+                append_test_string(&mut encoded, b"field");
+            }
+            AgentPrivateKey::new(encoded).expect("standard private key layout");
+        }
     }
 
     #[test]
     fn agent_identity_and_sign_data_limits_are_enforced() {
+        let mut unknown_key = Vec::new();
+        append_test_string(&mut unknown_key, b"unknown");
+        assert_eq!(
+            AgentPrivateKey::new(unknown_key),
+            Err(AgentError::MalformedFrame("unsupported private key algorithm"))
+        );
         assert_eq!(
             AgentIdentity::new(vec![0; MAX_AGENT_KEY_BLOB + 1], b"comment"),
             Err(AgentError::FieldTooLarge("key blob"))
@@ -1261,6 +1692,23 @@ mod tests {
             client.add_smartcard_key(b"provider", &vec![0; MAX_AGENT_PASSPHRASE + 1], 0),
             Err(AgentError::FieldTooLarge("smart-card PIN"))
         );
+        let private_key = ed25519_private_key();
+        assert_eq!(
+            client.add_identity_constrained(&private_key, b"comment", &[]),
+            Err(AgentError::MalformedFrame("identity constraints"))
+        );
+        assert_eq!(
+            AgentMessage::AddIdentityConstrained {
+                private_key,
+                comment: b"comment".to_vec(),
+                constraints: vec![AgentConstraint::Extension {
+                    name: b"extension".to_vec(),
+                    details: vec![0; MAX_AGENT_EXTENSION_DETAILS + 1],
+                }],
+            }
+            .encode_frame(),
+            Err(AgentError::FieldTooLarge("identity extension details"))
+        );
     }
 
     #[test]
@@ -1291,5 +1739,19 @@ mod tests {
         );
         assert!(!smartcard_debug.contains("private pin"));
         assert!(smartcard_debug.contains("pin_len"));
+
+        let private_key_debug = format!("{:?}", ed25519_private_key());
+        assert!(!private_key_debug.contains('8'));
+        assert!(private_key_debug.contains("encoded_len"));
+
+        let add_debug = format!(
+            "{:?}",
+            AgentMessage::AddIdentity {
+                private_key: ed25519_private_key(),
+                comment: b"private comment".to_vec(),
+            }
+        );
+        assert!(!add_debug.contains("private comment"));
+        assert!(add_debug.contains("comment_len"));
     }
 }
