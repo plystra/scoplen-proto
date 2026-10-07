@@ -50,8 +50,8 @@ request correlation, and the OpenSSH `limits@openssh.com`, `posix-rename@openssh
 handles and extension data. A concrete `russh` adapter now owns TCP or caller-supplied stream
 handshakes, validates raw keys and host certificates before invoking the trust callback, supports
 password authentication, and exposes opaque session and `direct-tcpip` channels with PTY, shell,
-exec, bounded data, EOF, close, and peer-event operations. A `ClientChannelStream` can carry a
-target handshake through a jump host with `ClientConnection::connect_via_direct_tcpip`; repeating
+exec, window-change, bounded data, EOF, close, and peer-event operations. A `ClientChannelStream`
+can carry a target handshake through a jump host with `ClientConnection::connect_via_direct_tcpip`; repeating
 the operation composes arbitrary jump depth while retaining each parent connection. The adapter
 keeps the engine types out of the public API. A bounded SOCKS4a/SOCKS5 dynamic listener now
 composes the handshake with

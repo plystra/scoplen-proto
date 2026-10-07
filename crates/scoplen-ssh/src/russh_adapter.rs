@@ -31,7 +31,7 @@ use zeroize::Zeroize;
 use crate::{
     CertificateValidationPolicy, ExtendedDataType, HostKeyVerificationError, HostKeyVerifier,
     MAX_CHANNEL_TEXT, PtyRequest, PublicKeyAuthContext, PublicKeyAuthRequest, PublicKeyIdentity,
-    SignatureAlgorithm, Signer, SignerError, verify_host_key,
+    SignatureAlgorithm, Signer, SignerError, WindowChangeRequest, verify_host_key,
 };
 
 const MAX_CLIENT_HOST: usize = 4096;
@@ -578,6 +578,18 @@ impl ClientChannel {
         self.channel.request_shell(want_reply).await.map_err(ClientError::from)
     }
 
+    /// Notify the remote PTY of a bounded terminal resize.
+    ///
+    /// The dimensions use the same RFC 4254 `window-change` shape as the engine-independent
+    /// channel codec. The four fields are fixed-width protocol values, so the request cannot
+    /// allocate based on peer-controlled input.
+    pub async fn window_change(&self, request: &WindowChangeRequest) -> Result<(), ClientError> {
+        self.channel
+            .window_change(request.columns, request.rows, request.pixel_width, request.pixel_height)
+            .await
+            .map_err(ClientError::from)
+    }
+
     /// Execute one bounded remote command.
     pub async fn exec(&self, want_reply: bool, command: &[u8]) -> Result<(), ClientError> {
         validate_text(command, MAX_CHANNEL_TEXT, "command", true).map_err(ClientError::Config)?;
@@ -953,10 +965,56 @@ mod tests {
     use scoplen_crypto::{Ed25519SigningKey, P256SigningKey};
     use ssh_key::Algorithm;
     use tokio::io::duplex;
+    use tokio::net::TcpListener;
+    use tokio::sync::mpsc;
     use tokio::time::{Duration, timeout};
 
     use super::*;
     use crate::{Ed25519SshSigner, HostKey, P256SshSigner, RsaSshSigner};
+
+    #[derive(Clone)]
+    struct ResizeServer {
+        changes: mpsc::Sender<WindowChangeRequest>,
+    }
+
+    impl russh::server::Handler for ResizeServer {
+        type Error = russh::Error;
+
+        async fn auth_password(
+            &mut self,
+            _user: &str,
+            _password: &str,
+        ) -> Result<russh::server::Auth, Self::Error> {
+            Ok(russh::server::Auth::Accept)
+        }
+
+        async fn channel_open_session(
+            &mut self,
+            _channel: russh::Channel<russh::server::Msg>,
+            reply: russh::server::ChannelOpenHandle,
+            _session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            reply.accept().await;
+            Ok(())
+        }
+
+        async fn window_change_request(
+            &mut self,
+            channel: russh::ChannelId,
+            columns: u32,
+            rows: u32,
+            pixel_width: u32,
+            pixel_height: u32,
+            session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            let _ = self
+                .changes
+                .send(WindowChangeRequest { columns, rows, pixel_width, pixel_height })
+                .await;
+            let _ = session.channel_success(channel);
+            Ok(())
+        }
+    }
 
     #[test]
     fn config_rejects_empty_host_and_zero_port() {
@@ -1034,6 +1092,46 @@ mod tests {
             result,
             Err(ClientError::Protocol | ClientError::ConnectionClosed | ClientError::Transport(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn window_change_forwards_bounded_dimensions() {
+        let (changes, mut received) = mpsc::channel(1);
+        let mut server_config = russh::server::Config::default();
+        server_config.keys.push(
+            PrivateKey::random(
+                &mut ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng),
+                Algorithm::Ed25519,
+            )
+            .expect("server key"),
+        );
+        let server_config = Arc::new(server_config);
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind server");
+        let address = listener.local_addr().expect("server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept client");
+            let _ =
+                russh::server::run_stream(server_config, stream, ResizeServer { changes }).await;
+        });
+
+        let verifier = |_host: &str, _key: &HostKey| Ok(());
+        let config = ClientConfig::new("127.0.0.1", address.port(), verifier).expect("config");
+        let mut connection = ClientConnection::connect(config).await.expect("connect client");
+        connection.authenticate_password("user", b"password").await.expect("authenticate client");
+        let channel = connection.open_session().await.expect("open session");
+        let expected = WindowChangeRequest {
+            columns: u32::MAX,
+            rows: u32::MAX - 1,
+            pixel_width: u32::MAX - 2,
+            pixel_height: u32::MAX - 3,
+        };
+        channel.window_change(&expected).await.expect("send resize");
+        let observed = timeout(Duration::from_secs(5), received.recv())
+            .await
+            .expect("resize callback")
+            .expect("resize event");
+        assert_eq!(observed, expected);
+        connection.disconnect().await.expect("disconnect client");
     }
 
     #[test]
