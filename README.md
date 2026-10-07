@@ -27,15 +27,22 @@ fail-closed forwarding policy.
 Bounded RFC 4254 channel codecs cover session and forwarding requests. The engine-independent
 `AuthAgentChannel` composes the `auth-agent@openssh.com` channel lifecycle with bounded agent
 framing, per-signature forwarding authorization, peer packet limits, and clean/truncated close
-outcomes. A bounded SFTP v3 packet
-boundary covers negotiation, core file, directory/path, and metadata requests and responses, bounded
+outcomes.
+
+Legacy Pageant `WM_COPYDATA` has a bounded, fail-closed protocol adapter with deterministic
+mapping names and an injectable platform backend; the crate keeps native Win32 FFI out of its safe
+protocol boundary.
+
+A bounded SFTP v3 packet boundary covers negotiation, core file, directory/path, and metadata
+requests and responses, bounded
 request correlation, and the OpenSSH `limits@openssh.com`, `posix-rename@openssh.com`,
 `statvfs@openssh.com`, `fstatvfs@openssh.com`, `hardlink@openssh.com`, `fsync@openssh.com`,
 `lsetstat@openssh.com`, `expand-path@openssh.com`, and `copy-data` extensions, with binary-safe
 handles and extension data. These are protocol boundaries; concrete russh connection and channel
-engines, legacy Pageant WM_COPYDATA discovery, transfer resume/progress, dynamic SOCKS listeners,
-and interoperability work remain open. The auth-agent channel boundary does not claim concrete
-engine scheduling or wire interoperability until those workstreams are implemented and tested.
+engines, a native Win32 backend for the injected Pageant discovery adapter, transfer
+resume/progress, dynamic SOCKS listeners, and interoperability work remain open. The auth-agent
+channel boundary does not claim concrete engine scheduling or wire interoperability until those
+workstreams are implemented and tested.
 The `scoplen-api` crate exposes the K-3 error-code registry, RFC 9457 problem details, and device
 challenge, signed-device request, and token response JSON codecs, plus K-4 session, change-feed,
 write-batch, acknowledgement, snapshot, version-history, content-free notification, and account

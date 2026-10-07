@@ -30,7 +30,11 @@ pub use agent::{
     MAX_AGENT_EXTENSION_DETAILS, MAX_AGENT_EXTENSION_NAME, MAX_AGENT_FORWARD_BUFFER,
     MAX_AGENT_FORWARD_RESPONSES, MAX_AGENT_FRAME, MAX_AGENT_IDENTITIES, MAX_AGENT_KEY_BLOB,
     MAX_AGENT_PRIVATE_KEY, MAX_AGENT_SIGN_DATA, MAX_AUTH_AGENT_CHANNEL_PACKET,
-    MAX_AUTH_AGENT_CHANNEL_WINDOW, PageantAgentChannel,
+    MAX_AUTH_AGENT_CHANNEL_WINDOW, PAGEANT_WM_COPYDATA_ID, PAGEANT_WM_COPYDATA_MAPPING_NAME_LEN,
+    PAGEANT_WM_COPYDATA_MAX_MSGLEN, PAGEANT_WM_COPYDATA_WINDOW_CLASS,
+    PAGEANT_WM_COPYDATA_WINDOW_TITLE, PageantAgentChannel, PageantWmCopyData,
+    PageantWmCopyDataBackend, PageantWmCopyDataChannel, pageant_wm_copydata_mapping_name,
+    validate_pageant_wm_copydata_mapping_name,
 };
 #[cfg(windows)]
 pub use agent::{connect_pageant_agent, connect_windows_agent};
