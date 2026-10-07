@@ -136,7 +136,9 @@ mod tests {
         BUILT_IN_POLICIES, CEDAR_SCHEMA, GATEWAY_CONTROL_PROTO, HOST_AGENT_PROTO, ListQuery, Page,
         ProblemDetails, QueryError, Resource,
     };
+    use cedar_policy::{PolicySet, Schema, ValidationMode, Validator};
     use serde_json::json;
+    use std::str::FromStr;
 
     #[test]
     fn query_bounds_match_openapi_contract() {
@@ -250,6 +252,18 @@ mod tests {
             "spl.agent.v1",
             "Agent",
             &["Enroll", "Heartbeat", "Subscribe", "RequestHostCertificate", "ReportConfiguration"],
+        );
+    }
+
+    #[test]
+    fn cedar_schema_and_built_in_policies_parse_and_validate_strictly() {
+        let schema = Schema::from_str(CEDAR_SCHEMA).expect("Cedar schema parses");
+        let policies = PolicySet::from_str(BUILT_IN_POLICIES).expect("Cedar policies parse");
+        let result = Validator::new(schema).validate(&policies, ValidationMode::Strict);
+        assert!(
+            result.validation_errors().next().is_none(),
+            "built-in policy validation failed: {:?}",
+            result.validation_errors().collect::<Vec<_>>()
         );
     }
 }
