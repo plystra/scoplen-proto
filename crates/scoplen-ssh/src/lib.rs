@@ -2,9 +2,9 @@
 //! Shared SSH protocol core for Scoplen clients and gateways.
 //!
 //! The algorithm policy, direct byte transport boundary, engine-independent authentication and
-//! channel boundaries, and security-key wire support for K-7. The concrete SSH handshake engine,
-//! channel scheduling, SFTP transfer engine, and proxy composition remain separate so callers do
-//! not depend on a particular engine.
+//! channel boundaries, security-key wire support, and bounded proxy composition for K-7. The
+//! concrete SSH handshake engine, channel scheduling, and SFTP transfer engine remain separate so
+//! callers do not depend on a particular engine.
 
 #![forbid(unsafe_code)]
 

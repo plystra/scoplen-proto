@@ -62,8 +62,8 @@ leaving channel allocation, window updates, and engine scheduling to the concret
 The channel boundary exposes bounded RFC 4254 channel-open, data, lifecycle, session-request, and
 global forwarding codecs, including direct and forwarded TCP, Unix streamlocal, and agent-forwarding
 channel types. It validates exact message consumption, field limits, request names, booleans, signal
-names, and forwarding failure reasons; the concrete engine, dynamic SOCKS listeners, and connection
-composition remain separate outcomes.
+names, and forwarding failure reasons; the concrete engine and connection multiplexing remain
+separate outcomes.
 The authentication boundary also encodes `none`, `password` and password-change, and
 keyboard-interactive exchanges with bounded context, prompt, and response fields; password and
 interactive response bytes are held in zeroizing secret containers. `RsaSshSigner` accepts only RSA
