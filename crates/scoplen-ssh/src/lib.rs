@@ -19,6 +19,7 @@ mod russh_adapter;
 mod security_key;
 mod sftp;
 mod socks;
+mod socks_listener;
 mod tcp;
 mod transport;
 
@@ -75,6 +76,12 @@ pub use sftp::{
 pub use socks::{
     MAX_SOCKS_BUFFER, MAX_SOCKS_DOMAIN, MAX_SOCKS_USER_ID, SocksAddress, SocksBindAddress,
     SocksConnectRequest, SocksError, SocksHandshake, SocksProgress, SocksReply, SocksVersion,
+};
+pub use socks_listener::{
+    DEFAULT_SOCKS_HANDSHAKE_TIMEOUT, DEFAULT_SOCKS_IO_BUFFER, DEFAULT_SOCKS_MAX_CONNECTIONS,
+    MAX_SOCKS_IO_BUFFER, SocksCancellation, SocksChannel, SocksChannelError, SocksChannelEvent,
+    SocksConnector, SocksForwardError, SocksListener, SocksListenerConfig, SocksListenerError,
+    SocksListenerOperation, SocksOpenError,
 };
 pub use tcp::{
     MAX_TCP_ADDRESSES, MAX_TCP_HOST, TcpTransport, Transport, TransportError, TransportOperation,
