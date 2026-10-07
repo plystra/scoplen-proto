@@ -10,6 +10,7 @@
 use std::{
     borrow::Cow,
     fmt, io,
+    net::TcpStream as StdTcpStream,
     pin::Pin,
     str,
     sync::Arc,
@@ -31,9 +32,9 @@ use zeroize::Zeroize;
 
 use crate::{
     CertificateValidationPolicy, ExtendedDataType, HostKeyVerificationError, HostKeyVerifier,
-    MAX_CHANNEL_ADDRESS, MAX_CHANNEL_TEXT, PtyRequest, PublicKeyAuthContext, PublicKeyAuthRequest,
-    PublicKeyIdentity, SignatureAlgorithm, Signer, SignerError, WindowChangeRequest,
-    verify_host_key,
+    HttpConnectTransport, MAX_CHANNEL_ADDRESS, MAX_CHANNEL_TEXT, ProxyCredentials,
+    ProxyTransportError, PtyRequest, PublicKeyAuthContext, PublicKeyAuthRequest, PublicKeyIdentity,
+    SignatureAlgorithm, Signer, SignerError, Socks5Transport, WindowChangeRequest, verify_host_key,
 };
 
 const MAX_CLIENT_HOST: usize = 4096;
@@ -294,6 +295,9 @@ pub enum ClientError {
     /// A TCP or stream I/O operation failed.
     #[error("SSH transport I/O failed: {0}")]
     Transport(#[source] std::io::Error),
+    /// A SOCKS5 or HTTP CONNECT route failed before the SSH stream was opened.
+    #[error("SSH proxy route failed: {0}")]
+    Proxy(#[from] ProxyTransportError),
     /// The peer refused a channel open request.
     #[error("SSH channel open failed ({code}): {reason}")]
     ChannelOpen { code: u32, reason: String },
@@ -399,6 +403,81 @@ impl ClientConnection {
         let handle =
             client::connect_stream(Arc::new(config.russh_config()), stream, handler).await?;
         Ok(Self { handle, channel_slots, channel_limit: config.channel_limit, forwarded_channels })
+    }
+
+    /// Connect through a SOCKS5 proxy and complete the SSH handshake over the resulting stream.
+    ///
+    /// The existing bounded SOCKS5 transport performs DNS, proxy negotiation, and socket setup
+    /// on a blocking worker so the caller's async runtime is not stalled. The resulting socket is
+    /// then handed to the same `russh` stream boundary used by [`Self::connect_stream`].
+    pub async fn connect_via_socks5(
+        config: ClientConfig,
+        proxy_host: &str,
+        proxy_port: u16,
+        credentials: Option<&ProxyCredentials>,
+        timeout: Duration,
+    ) -> Result<Self, ClientError> {
+        let proxy_host = proxy_host.to_owned();
+        let target_host = config.host.clone();
+        let target_port = config.port;
+        let credentials = credentials.cloned();
+        let stream = tokio::task::spawn_blocking(move || {
+            Socks5Transport::connect_with_credentials(
+                &proxy_host,
+                proxy_port,
+                &target_host,
+                target_port,
+                credentials.as_ref(),
+                timeout,
+            )
+            .map(Socks5Transport::into_stream)
+        })
+        .await
+        .map_err(|_| ClientError::Transport(io::Error::other("SSH proxy route task stopped")))?
+        .map_err(ClientError::Proxy)?;
+        Self::connect_via_proxy_socket(config, stream).await
+    }
+
+    /// Connect through an HTTP CONNECT proxy and complete the SSH handshake over the stream.
+    ///
+    /// The existing bounded HTTP CONNECT transport performs the proxy handshake on a blocking
+    /// worker, clears handshake-only socket timeouts, and then reuses the common async SSH stream
+    /// boundary.
+    pub async fn connect_via_http_connect(
+        config: ClientConfig,
+        proxy_host: &str,
+        proxy_port: u16,
+        credentials: Option<&ProxyCredentials>,
+        timeout: Duration,
+    ) -> Result<Self, ClientError> {
+        let proxy_host = proxy_host.to_owned();
+        let target_host = config.host.clone();
+        let target_port = config.port;
+        let credentials = credentials.cloned();
+        let stream = tokio::task::spawn_blocking(move || {
+            HttpConnectTransport::connect_with_credentials(
+                &proxy_host,
+                proxy_port,
+                &target_host,
+                target_port,
+                credentials.as_ref(),
+                timeout,
+            )
+            .map(HttpConnectTransport::into_stream)
+        })
+        .await
+        .map_err(|_| ClientError::Transport(io::Error::other("SSH proxy route task stopped")))?
+        .map_err(ClientError::Proxy)?;
+        Self::connect_via_proxy_socket(config, stream).await
+    }
+
+    async fn connect_via_proxy_socket(
+        config: ClientConfig,
+        stream: StdTcpStream,
+    ) -> Result<Self, ClientError> {
+        stream.set_nonblocking(true).map_err(ClientError::Transport)?;
+        let stream = tokio::net::TcpStream::from_std(stream).map_err(ClientError::Transport)?;
+        Self::connect_stream(config, stream).await
     }
 
     /// Connect to a target through an already connected and authenticated jump host.
@@ -1302,6 +1381,11 @@ fn unix_time_seconds() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        net::{IpAddr, SocketAddr, TcpListener as StdTcpListener},
+        thread,
+    };
+
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -1310,13 +1394,16 @@ mod tests {
     use russh::keys::PrivateKey;
     use scoplen_crypto::{Ed25519SigningKey, P256SigningKey};
     use ssh_key::Algorithm;
-    use tokio::io::duplex;
-    use tokio::net::TcpListener;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional, duplex};
+    use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::mpsc;
     use tokio::time::{Duration, timeout};
 
     use super::*;
-    use crate::{Ed25519SshSigner, HostKey, P256SshSigner, RsaSshSigner};
+    use crate::{
+        Ed25519SshSigner, HostKey, P256SshSigner, ProxyError, ProxyOperation, ProxyProtocol,
+        ProxyTransportError, RsaSshSigner,
+    };
 
     #[derive(Clone)]
     struct ResizeServer {
@@ -1607,6 +1694,149 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
+    enum RouteProxyKind {
+        Socks5,
+        HttpConnect,
+    }
+
+    async fn start_echo_server() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let (changes, _received) = mpsc::channel(1);
+        let mut server_config = russh::server::Config::default();
+        server_config.keys.push(
+            PrivateKey::random(
+                &mut ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng),
+                Algorithm::Ed25519,
+            )
+            .expect("server key"),
+        );
+        let server_config = Arc::new(server_config);
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind SSH server");
+        let address = listener.local_addr().expect("SSH server address");
+        let task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept SSH client");
+            let _ =
+                russh::server::run_stream(server_config, stream, ResizeServer { changes }).await;
+        });
+        (address, task)
+    }
+
+    async fn start_route_proxy(
+        kind: RouteProxyKind,
+        target: SocketAddr,
+        expected_host: &'static str,
+        expected_port: u16,
+    ) -> (u16, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind proxy");
+        let port = listener.local_addr().expect("proxy address").port();
+        let task = tokio::spawn(async move {
+            let (mut client, _) = listener.accept().await.expect("accept proxy client");
+            match kind {
+                RouteProxyKind::Socks5 => {
+                    socks5_proxy_handshake(&mut client, expected_host, expected_port, 0).await;
+                }
+                RouteProxyKind::HttpConnect => {
+                    http_connect_proxy_handshake(&mut client, expected_host, expected_port, 200)
+                        .await;
+                }
+            }
+            let mut target_stream = TcpStream::connect(target).await.expect("connect SSH target");
+            let _ = copy_bidirectional(&mut client, &mut target_stream).await;
+        });
+        (port, task)
+    }
+
+    async fn start_reject_proxy(
+        kind: RouteProxyKind,
+        expected_host: &'static str,
+        expected_port: u16,
+    ) -> (u16, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind rejecting proxy");
+        let port = listener.local_addr().expect("rejecting proxy address").port();
+        let task = tokio::spawn(async move {
+            let (mut client, _) = listener.accept().await.expect("accept rejecting proxy client");
+            match kind {
+                RouteProxyKind::Socks5 => {
+                    socks5_proxy_handshake(&mut client, expected_host, expected_port, 5).await;
+                }
+                RouteProxyKind::HttpConnect => {
+                    http_connect_proxy_handshake(&mut client, expected_host, expected_port, 407)
+                        .await;
+                }
+            }
+        });
+        (port, task)
+    }
+
+    async fn socks5_proxy_handshake(
+        client: &mut TcpStream,
+        expected_host: &str,
+        expected_port: u16,
+        reply_code: u8,
+    ) {
+        let mut greeting = [0; 2];
+        client.read_exact(&mut greeting).await.expect("SOCKS greeting header");
+        assert_eq!(greeting[0], 5);
+        let mut methods = vec![0; usize::from(greeting[1])];
+        client.read_exact(&mut methods).await.expect("SOCKS methods");
+        assert!(methods.contains(&0), "route test requires no-auth SOCKS");
+        client.write_all(&[5, 0]).await.expect("SOCKS method response");
+
+        let mut header = [0; 4];
+        client.read_exact(&mut header).await.expect("SOCKS request header");
+        assert_eq!(header[..3], [5, 1, 0]);
+        let host = match header[3] {
+            1 => {
+                let mut address = [0; 4];
+                client.read_exact(&mut address).await.expect("SOCKS IPv4 address");
+                IpAddr::from(address).to_string()
+            }
+            3 => {
+                let mut length = [0; 1];
+                client.read_exact(&mut length).await.expect("SOCKS domain length");
+                let mut domain = vec![0; usize::from(length[0])];
+                client.read_exact(&mut domain).await.expect("SOCKS domain");
+                String::from_utf8(domain).expect("SOCKS domain text")
+            }
+            4 => {
+                let mut address = [0; 16];
+                client.read_exact(&mut address).await.expect("SOCKS IPv6 address");
+                IpAddr::from(address).to_string()
+            }
+            address_type => panic!("unexpected SOCKS address type {address_type}"),
+        };
+        let mut port = [0; 2];
+        client.read_exact(&mut port).await.expect("SOCKS target port");
+        assert_eq!(host, expected_host);
+        assert_eq!(u16::from_be_bytes(port), expected_port);
+        client.write_all(&[5, reply_code, 0, 1, 0, 0, 0, 0, 0, 0]).await.expect("SOCKS response");
+    }
+
+    async fn http_connect_proxy_handshake(
+        client: &mut TcpStream,
+        expected_host: &str,
+        expected_port: u16,
+        status: u16,
+    ) {
+        let mut request = Vec::new();
+        let mut byte = [0; 1];
+        while !request.ends_with(b"\r\n\r\n") {
+            client.read_exact(&mut byte).await.expect("HTTP CONNECT request");
+            request.push(byte[0]);
+            assert!(request.len() <= 4096, "HTTP CONNECT request is bounded");
+        }
+        let request = String::from_utf8(request).expect("HTTP CONNECT request text");
+        assert!(
+            request.starts_with(&format!("CONNECT {expected_host}:{expected_port} HTTP/1.1\r\n"))
+        );
+        let response = if status == 200 {
+            "HTTP/1.1 200 Connection Established\r\n\r\n".to_owned()
+        } else {
+            format!("HTTP/1.1 {status} Proxy Rejected\r\n\r\n")
+        };
+        client.write_all(response.as_bytes()).await.expect("HTTP CONNECT response");
+    }
+
     #[test]
     fn config_rejects_empty_host_and_zero_port() {
         let verifier = |_host: &str, _key: &HostKey| Ok(());
@@ -1694,6 +1924,171 @@ mod tests {
             result,
             Err(ClientError::Protocol | ClientError::ConnectionClosed | ClientError::Transport(_))
         ));
+    }
+
+    async fn proxy_route_round_trip(kind: RouteProxyKind) {
+        let (target, server_task) = start_echo_server().await;
+        let (proxy_port, proxy_task) =
+            start_route_proxy(kind, target, "target.example", target.port()).await;
+        let verifier = |_host: &str, _key: &HostKey| Ok(());
+        let config = ClientConfig::new("target.example", target.port(), verifier).expect("config");
+        let mut connection = match kind {
+            RouteProxyKind::Socks5 => timeout(
+                Duration::from_secs(5),
+                ClientConnection::connect_via_socks5(
+                    config,
+                    "127.0.0.1",
+                    proxy_port,
+                    None,
+                    Duration::from_secs(2),
+                ),
+            )
+            .await
+            .expect("SOCKS route handshake")
+            .expect("SOCKS route connection"),
+            RouteProxyKind::HttpConnect => timeout(
+                Duration::from_secs(5),
+                ClientConnection::connect_via_http_connect(
+                    config,
+                    "127.0.0.1",
+                    proxy_port,
+                    None,
+                    Duration::from_secs(2),
+                ),
+            )
+            .await
+            .expect("HTTP CONNECT route handshake")
+            .expect("HTTP CONNECT route connection"),
+        };
+        connection.authenticate_password("user", b"password").await.expect("authenticate route");
+        let mut channel = connection.open_session().await.expect("open route session");
+        channel.send_data(b"proxy route payload").await.expect("send route payload");
+        assert!(matches!(
+            timeout(Duration::from_secs(5), channel.next_event())
+                .await
+                .expect("route response")
+                .expect("route response result"),
+            Some(ChannelEvent::Data(data)) if data == b"proxy route payload"
+        ));
+        channel.close().await.expect("close route session");
+        drop(channel);
+        connection.disconnect().await.expect("disconnect route connection");
+        proxy_task.await.expect("proxy task");
+        timeout(Duration::from_secs(5), server_task)
+            .await
+            .expect("SSH server task")
+            .expect("SSH server");
+    }
+
+    #[tokio::test]
+    async fn proxy_routes_complete_real_russh_handshake_and_data_round_trip() {
+        proxy_route_round_trip(RouteProxyKind::Socks5).await;
+        proxy_route_round_trip(RouteProxyKind::HttpConnect).await;
+    }
+
+    #[tokio::test]
+    async fn proxy_routes_map_rejection_and_socks_auth_downgrade() {
+        for kind in [RouteProxyKind::Socks5, RouteProxyKind::HttpConnect] {
+            let (proxy_port, proxy_task) = start_reject_proxy(kind, "target.example", 22).await;
+            let verifier = |_host: &str, _key: &HostKey| Ok(());
+            let config = ClientConfig::new("target.example", 22, verifier).expect("config");
+            let error = match kind {
+                RouteProxyKind::Socks5 => ClientConnection::connect_via_socks5(
+                    config,
+                    "127.0.0.1",
+                    proxy_port,
+                    None,
+                    Duration::from_secs(2),
+                )
+                .await
+                .expect_err("SOCKS route rejection"),
+                RouteProxyKind::HttpConnect => ClientConnection::connect_via_http_connect(
+                    config,
+                    "127.0.0.1",
+                    proxy_port,
+                    None,
+                    Duration::from_secs(2),
+                )
+                .await
+                .expect_err("HTTP CONNECT route rejection"),
+            };
+            let expected = match kind {
+                RouteProxyKind::Socks5 => {
+                    ProxyError::Rejected { protocol: ProxyProtocol::Socks5, code: 5 }
+                }
+                RouteProxyKind::HttpConnect => {
+                    ProxyError::Rejected { protocol: ProxyProtocol::HttpConnect, code: 407 }
+                }
+            };
+            assert!(matches!(
+                error,
+                ClientError::Proxy(ProxyTransportError::Proxy(actual)) if actual == expected
+            ));
+            proxy_task.await.expect("rejecting proxy task");
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind downgrade proxy");
+        let proxy_port = listener.local_addr().expect("downgrade proxy address").port();
+        let proxy_task = tokio::spawn(async move {
+            let (mut client, _) = listener.accept().await.expect("accept downgrade client");
+            let mut greeting = [0; 2];
+            client.read_exact(&mut greeting).await.expect("downgrade greeting header");
+            assert_eq!(greeting, [5, 1]);
+            let mut method = [0; 1];
+            client.read_exact(&mut method).await.expect("downgrade greeting method");
+            assert_eq!(method, [2]);
+            client.write_all(&[5, 0]).await.expect("downgrade response");
+        });
+        let credentials = ProxyCredentials::new("user", "pass").expect("proxy credentials");
+        let verifier = |_host: &str, _key: &HostKey| Ok(());
+        let config = ClientConfig::new("target.example", 22, verifier).expect("config");
+        let error = ClientConnection::connect_via_socks5(
+            config,
+            "127.0.0.1",
+            proxy_port,
+            Some(&credentials),
+            Duration::from_secs(2),
+        )
+        .await
+        .expect_err("SOCKS credentials must not downgrade");
+        assert!(matches!(
+            error,
+            ClientError::Proxy(ProxyTransportError::Proxy(ProxyError::Rejected {
+                protocol: ProxyProtocol::Socks5,
+                code: 0
+            }))
+        ));
+        proxy_task.await.expect("downgrade proxy task");
+    }
+
+    #[tokio::test]
+    async fn proxy_route_maps_handshake_timeout() {
+        let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind timeout proxy");
+        let proxy_port = listener.local_addr().expect("timeout proxy address").port();
+        let proxy_task = thread::spawn(move || {
+            let (_client, _) = listener.accept().expect("accept timeout client");
+            thread::sleep(std::time::Duration::from_millis(500));
+        });
+        let verifier = |_host: &str, _key: &HostKey| Ok(());
+        let config = ClientConfig::new("target.example", 22, verifier).expect("config");
+        let error = ClientConnection::connect_via_http_connect(
+            config,
+            "127.0.0.1",
+            proxy_port,
+            None,
+            Duration::from_millis(100),
+        )
+        .await
+        .expect_err("HTTP CONNECT timeout");
+        assert!(matches!(
+            error,
+            ClientError::Proxy(ProxyTransportError::Proxy(ProxyError::Io {
+                protocol: ProxyProtocol::HttpConnect,
+                operation: ProxyOperation::Read,
+                kind: std::io::ErrorKind::TimedOut
+            }))
+        ));
+        proxy_task.join().expect("timeout proxy task");
     }
 
     #[tokio::test]

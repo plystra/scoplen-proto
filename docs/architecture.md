@@ -56,7 +56,11 @@ SOCKS5 and HTTP CONNECT transports compose bounded proxy handshakes over `Transp
 1929 and HTTP CONNECT Basic authentication accept bounded zeroized credentials;
 `ProxyCommandTransport` composes a
 bounded direct child process over stdin/stdout without a shell and reaps it on shutdown or drop.
-The native Pageant backend, transfer resume/progress, and interoperability work remain open.
+`ClientConnection::connect_via_socks5` and `connect_via_http_connect` run those bounded proxy
+handshakes on blocking workers, upgrade the resulting nonblocking sockets to the async `russh`
+stream boundary, and preserve typed proxy rejection and timeout errors. Gateway framing and
+interoperability with other SSH engines remain open.
+The native Pageant backend remains open.
 The agent server can consume
 multiple bounded frames from a blocking stream through clean peer close while applying the same
 malformed and oversized-frame checks.

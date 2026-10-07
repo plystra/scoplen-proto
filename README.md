@@ -27,6 +27,8 @@ CONNECT Basic proxy authentication are bounded and keep passwords out of transpo
 transports do not perform SSH negotiation or authentication. `ProxyCommandTransport` provides
 bounded direct child-process stdin/stdout composition without shell interpolation and reaps the
 child on shutdown or drop.
+`ClientConnection::connect_via_socks5` and `connect_via_http_connect` compose the existing bounded
+proxy handshakes with the concrete async SSH client, preserving proxy rejection and timeout errors.
 Software Ed25519, P-256, and
 RSA/SHA-2 signers, FIDO2 security-key hooks, RFC 4252 `none`, password and keyboard-interactive
 codecs, certificate validation, and host-verification callbacks are available. Agent support
