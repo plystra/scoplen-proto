@@ -91,7 +91,7 @@ impl SftpExtension {
         let name = name.into();
         let data = data.into();
         validate_string(&name, "extension name", false)?;
-        validate_string(&data, "extension data", true)?;
+        validate_opaque(&data, MAX_SFTP_STRING, "extension data", true)?;
         Ok(Self { name, data })
     }
 }
@@ -159,7 +159,12 @@ impl SftpAttributes {
             );
             for extension in &self.extended {
                 validate_string(&extension.name, "attribute extension name", false)?;
-                validate_string(&extension.data, "attribute extension data", true)?;
+                validate_opaque(
+                    &extension.data,
+                    MAX_SFTP_STRING,
+                    "attribute extension data",
+                    true,
+                )?;
                 encoder.string(&extension.name, MAX_SFTP_STRING, "attribute extension name")?;
                 encoder.string(&extension.data, MAX_SFTP_STRING, "attribute extension data")?;
             }
@@ -192,7 +197,7 @@ impl SftpAttributes {
             for _ in 0..count {
                 extensions.push(SftpExtension::new(
                     reader.bytes(MAX_SFTP_STRING, "attribute extension name", false)?,
-                    reader.bytes(MAX_SFTP_STRING, "attribute extension data", true)?,
+                    reader.opaque(MAX_SFTP_STRING, "attribute extension data", true)?,
                 )?);
             }
             extensions
@@ -251,7 +256,7 @@ impl SftpPacket {
                 encoder.u32(*version);
                 for extension in extensions {
                     validate_string(&extension.name, "extension name", false)?;
-                    validate_string(&extension.data, "extension data", true)?;
+                    validate_opaque(&extension.data, MAX_SFTP_STRING, "extension data", true)?;
                     encoder.string(&extension.name, MAX_SFTP_STRING, "extension name")?;
                     encoder.string(&extension.data, MAX_SFTP_STRING, "extension data")?;
                 }
@@ -265,12 +270,16 @@ impl SftpPacket {
                 attrs.encode_into(&mut encoder)?;
             }
             Self::Close { id, handle } => {
+                validate_opaque(handle, MAX_SFTP_HANDLE, "handle", false)?;
                 encoder.u8(FXP_CLOSE);
                 encoder.u32(*id);
                 encoder.string(handle, MAX_SFTP_HANDLE, "handle")?;
             }
             Self::Read { id, handle, offset, length } => {
-                if *length == 0 {
+                validate_opaque(handle, MAX_SFTP_HANDLE, "handle", false)?;
+                if *length == 0
+                    || usize::try_from(*length).unwrap_or(usize::MAX) > MAX_SFTP_PACKET - 64
+                {
                     return Err(SftpError::InvalidValue("read length"));
                 }
                 encoder.u8(FXP_READ);
@@ -280,6 +289,7 @@ impl SftpPacket {
                 encoder.u32(*length);
             }
             Self::Write { id, handle, offset, data } => {
+                validate_opaque(handle, MAX_SFTP_HANDLE, "handle", false)?;
                 validate_data(data)?;
                 encoder.u8(FXP_WRITE);
                 encoder.u32(*id);
@@ -290,6 +300,7 @@ impl SftpPacket {
             Self::Stat { id, path } => encode_path_request(&mut encoder, FXP_STAT, *id, path)?,
             Self::Lstat { id, path } => encode_path_request(&mut encoder, FXP_LSTAT, *id, path)?,
             Self::Fstat { id, handle } => {
+                validate_opaque(handle, MAX_SFTP_HANDLE, "handle", false)?;
                 encoder.u8(FXP_FSTAT);
                 encoder.u32(*id);
                 encoder.string(handle, MAX_SFTP_HANDLE, "handle")?;
@@ -304,6 +315,7 @@ impl SftpPacket {
                 encoder.string(language, MAX_SFTP_STRING, "status language")?;
             }
             Self::Handle { id, handle } => {
+                validate_opaque(handle, MAX_SFTP_HANDLE, "handle", false)?;
                 encoder.u8(FXP_HANDLE);
                 encoder.u32(*id);
                 encoder.string(handle, MAX_SFTP_HANDLE, "handle")?;
@@ -350,7 +362,7 @@ impl SftpPacket {
                     }
                     extensions.push(SftpExtension::new(
                         reader.bytes(MAX_SFTP_STRING, "extension name", false)?,
-                        reader.bytes(MAX_SFTP_STRING, "extension data", true)?,
+                        reader.opaque(MAX_SFTP_STRING, "extension data", true)?,
                     )?);
                 }
                 Self::Version { version, extensions }
@@ -363,23 +375,25 @@ impl SftpPacket {
             },
             FXP_CLOSE => Self::Close {
                 id: reader.u32("request id")?,
-                handle: reader.bytes(MAX_SFTP_HANDLE, "handle", false)?,
+                handle: reader.opaque(MAX_SFTP_HANDLE, "handle", false)?,
             },
             FXP_READ => {
                 let id = reader.u32("request id")?;
-                let handle = reader.bytes(MAX_SFTP_HANDLE, "handle", false)?;
+                let handle = reader.opaque(MAX_SFTP_HANDLE, "handle", false)?;
                 let offset = reader.u64("offset")?;
                 let length = reader.u32("read length")?;
-                if length == 0 {
+                if length == 0
+                    || usize::try_from(length).unwrap_or(usize::MAX) > MAX_SFTP_PACKET - 64
+                {
                     return Err(SftpError::InvalidValue("read length"));
                 }
                 Self::Read { id, handle, offset, length }
             }
             FXP_WRITE => {
                 let id = reader.u32("request id")?;
-                let handle = reader.bytes(MAX_SFTP_HANDLE, "handle", false)?;
+                let handle = reader.opaque(MAX_SFTP_HANDLE, "handle", false)?;
                 let offset = reader.u64("offset")?;
-                let data = reader.bytes(MAX_SFTP_PACKET - 4, "write data", true)?;
+                let data = reader.opaque(MAX_SFTP_PACKET - 64, "write data", true)?;
                 Self::Write { id, handle, offset, data }
             }
             FXP_STAT | FXP_LSTAT => {
@@ -393,7 +407,7 @@ impl SftpPacket {
             }
             FXP_FSTAT => Self::Fstat {
                 id: reader.u32("request id")?,
-                handle: reader.bytes(MAX_SFTP_HANDLE, "handle", false)?,
+                handle: reader.opaque(MAX_SFTP_HANDLE, "handle", false)?,
             },
             FXP_STATUS => Self::Status {
                 id: reader.u32("request id")?,
@@ -403,11 +417,11 @@ impl SftpPacket {
             },
             FXP_HANDLE => Self::Handle {
                 id: reader.u32("request id")?,
-                handle: reader.bytes(MAX_SFTP_HANDLE, "handle", false)?,
+                handle: reader.opaque(MAX_SFTP_HANDLE, "handle", false)?,
             },
             FXP_DATA => Self::Data {
                 id: reader.u32("request id")?,
-                data: reader.bytes(MAX_SFTP_PACKET - 4, "data", true)?,
+                data: reader.opaque(MAX_SFTP_PACKET - 64, "data", true)?,
             },
             FXP_ATTRS => Self::Attrs {
                 id: reader.u32("request id")?,
@@ -523,13 +537,23 @@ fn encode_path_request(
 }
 
 fn validate_string(value: &[u8], field: &'static str, allow_empty: bool) -> Result<(), SftpError> {
-    if value.len() > MAX_SFTP_STRING {
+    validate_opaque(value, MAX_SFTP_STRING, field, allow_empty)?;
+    if value.contains(&0) {
+        return Err(SftpError::InvalidValue(field));
+    }
+    Ok(())
+}
+
+fn validate_opaque(
+    value: &[u8],
+    limit: usize,
+    field: &'static str,
+    allow_empty: bool,
+) -> Result<(), SftpError> {
+    if value.len() > limit {
         return Err(SftpError::FieldTooLarge(field));
     }
     if !allow_empty && value.is_empty() {
-        return Err(SftpError::InvalidValue(field));
-    }
-    if value.contains(&0) {
         return Err(SftpError::InvalidValue(field));
     }
     Ok(())
@@ -643,15 +667,25 @@ impl<'a> Reader<'a> {
         field: &'static str,
         allow_empty: bool,
     ) -> Result<Vec<u8>, SftpError> {
+        let bytes = self.opaque(limit, field, allow_empty)?;
+        if bytes.contains(&0) {
+            return Err(SftpError::InvalidValue(field));
+        }
+        Ok(bytes)
+    }
+
+    fn opaque(
+        &mut self,
+        limit: usize,
+        field: &'static str,
+        allow_empty: bool,
+    ) -> Result<Vec<u8>, SftpError> {
         let length = self.u32(field)? as usize;
         if length > limit {
             return Err(SftpError::FieldTooLarge(field));
         }
         let bytes = self.take(length, field)?.to_vec();
         if !allow_empty && bytes.is_empty() {
-            return Err(SftpError::InvalidValue(field));
-        }
-        if bytes.contains(&0) && field != "data" && field != "write data" {
             return Err(SftpError::InvalidValue(field));
         }
         Ok(bytes)
@@ -790,6 +824,32 @@ mod tests {
         assert_eq!(
             SftpPacket::Version { version: 3, extensions }.encode(),
             Err(SftpError::FieldTooLarge("version extensions"))
+        );
+    }
+
+    #[test]
+    fn opaque_handles_and_extension_data_preserve_binary_bytes() {
+        let handle = vec![0, 0xff, 0];
+        let packet = SftpPacket::Handle { id: 7, handle: handle.clone() };
+        assert_eq!(SftpPacket::decode(&packet.encode().unwrap()), Ok(packet));
+        let version = SftpPacket::Version {
+            version: 3,
+            extensions: vec![SftpExtension::new(b"binary@test", [0, 0xff, 0]).unwrap()],
+        };
+        assert_eq!(SftpPacket::decode(&version.encode().unwrap()), Ok(version));
+        let read = SftpPacket::Read { id: 8, handle, offset: 1, length: 8 };
+        assert_eq!(SftpPacket::decode(&read.encode().unwrap()), Ok(read));
+    }
+
+    #[test]
+    fn requests_reject_unbounded_reads_and_empty_handles() {
+        assert_eq!(
+            SftpPacket::Read { id: 1, handle: b"h".to_vec(), offset: 0, length: u32::MAX }.encode(),
+            Err(SftpError::InvalidValue("read length"))
+        );
+        assert_eq!(
+            SftpPacket::Close { id: 2, handle: Vec::new() }.encode(),
+            Err(SftpError::InvalidValue("handle"))
         );
     }
 }

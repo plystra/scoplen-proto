@@ -16,33 +16,17 @@ the S3 primitive boundary now includes zeroizing secret containers, operating-sy
 XChaCha20-Poly1305, HKDF-SHA-256, Argon2id, P-256 and Ed25519 signatures, and HPKE key wrapping
 for device and account recipients. The published K-2 known-answer set is exercised through the
 `scoplen-crypto` public API; S3 remains incomplete while pairing is unimplemented.
-The `scoplen-ssh` crate exposes K-7's ordered client algorithm policy with explicit per-Host
-legacy opt-in, role-specific transport offers, deterministic algorithm negotiation, and a strict
-key-exchange state machine. It also provides engine-independent publickey boundaries for Ed25519,
-P-256, and FIDO2 `sk-` security-key providers, RFC 4252 session-bound requests, OpenSSH user
-certificates, and host-key verification callbacks that run only after certificate validation.
-Security-key requests validate resident-key identities, applications, authenticator flags, counters,
-and bounded OpenSSH signature encodings. It does not yet establish SSH connections; the concrete
-russh transport, platform agent channels, agent forwarding, remaining authentication methods,
-concrete channel transport, SFTP, and interoperability work remain open. The agent boundary
-already provides bounded request-identities and sign request/response codecs, a transport-neutral client, and
-server dispatch with opaque failure mapping. A bounded blocking stream adapter is available with
-Unix-domain socket and Windows named-pipe constructors; Pageant and agent forwarding remain open.
-The client and server boundary also supports bounded remove-all, smart-card load and removal, lock,
-and unlock management requests with opaque failure mapping; add-identity, Pageant, and forwarding
-remain open. The public API also exposes bounded RFC 4254 channel-open, data, lifecycle,
-session-request, and forwarding codecs; concrete engine transport and dynamic SOCKS listeners
-remain open.
-The server boundary can serve multiple bounded frames from a blocking stream until clean peer
-close and rejects oversized input before allocation.
-Exact-key remove-identity requests are also supported with bounded public-key blobs; add-identity,
-Pageant, and forwarding remain open.
-The forwarding boundary now fails closed by default and can require an authorizer for every
-forwarded signature before dispatch; the SSH `auth-agent` channel integration remains open.
-RFC 4252 `none`, `password` (including change), and keyboard-interactive request, prompt, and
-response codecs are available with bounded fields and zeroizing password or response storage.
-Software RSA keys can sign with strictly selected `rsa-sha2-256` or `rsa-sha2-512` algorithms;
-concrete SSH engine integration remains open.
+The `scoplen-ssh` crate exposes K-7's ordered algorithm policy, role-specific offers, strict key
+exchange state, and engine-independent authentication boundaries. Software Ed25519, P-256, and
+RSA/SHA-2 signers, FIDO2 security-key hooks, RFC 4252 `none`, password and keyboard-interactive
+codecs, certificate validation, and host-verification callbacks are available. Agent support
+includes bounded Unix-socket and Windows named-pipe streams, identity and signing requests,
+add/remove/lock/smart-card management, opaque extensions, and fail-closed forwarding policy.
+Bounded RFC 4254 channel codecs cover session and forwarding requests. A bounded SFTP v3 packet
+boundary covers negotiation, core file requests and responses, and request correlation, with
+binary-safe handles and extension data. These are protocol boundaries; concrete russh connection
+and channel engines, Pageant, SSH `auth-agent` channel integration, full SFTP operations and
+extensions, dynamic SOCKS listeners, and interoperability work remain open.
 The `scoplen-api` crate exposes the K-3 error-code registry, RFC 9457 problem details, and device
 challenge, signed-device request, and token response JSON codecs, plus K-4 session, change-feed,
 write-batch, acknowledgement, snapshot, version-history, content-free notification, and account

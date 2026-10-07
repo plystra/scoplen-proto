@@ -38,6 +38,8 @@ All notable changes to `scoplen-proto` will be recorded here.
   an agent, with opaque failure mapping and passphrase limits.
 - Added bounded smart-card provider load and removal requests with PIN redaction, flag preservation,
   opaque failure mapping, and client/server store hooks.
+- Added bounded `SSH_AGENTC_EXTENSION` requests with opaque success and extension-failure responses,
+  client and server hooks, and malformed, oversize, and debug-redaction coverage.
 - Added bounded RFC 4254 channel-open, channel-data, lifecycle, session-request, agent-forwarding,
   direct/forwarded TCP and streamlocal, and global forwarding codecs with strict field limits and
   malformed-input tests.
@@ -51,11 +53,17 @@ All notable changes to `scoplen-proto` will be recorded here.
   regression test for the public logging surface.
 - Added a fail-closed per-profile forwarding policy and authorizer hook that gates every forwarded
   signature before server dispatch, including framed-stream serving and allow or deny tests.
+- Added a bounded forwarded-agent channel adapter that reassembles fragmented and multi-frame
+  channel data, splits responses at the channel limit, rejects management and extension requests,
+  and distinguishes clean close from truncation.
 - Added bounded RFC 4252 `none`, `password` and password-change, and keyboard-interactive request,
   prompt, and response codecs; password and response bytes use zeroizing secret storage and
   malformed, NUL, truncation, and size failure paths are covered.
 - Added RSA software signers with strict `rsa-sha2-256` and `rsa-sha2-512` selection, SSH `ssh-rsa`
   public-key blobs, certificate subject binding, and hash-substitution and malformed-key failures.
+- Added a bounded SFTP v3 packet boundary for INIT/VERSION negotiation, core file requests and
+  responses, binary-safe handles and extension data, malformed-input rejection, and pipelined
+  request correlation.
 - Added the stable HTTP error-code registry and RFC 9457 problem details with JSON and deterministic
   CBOR codecs, including malformed-input tests and a published CBOR vector.
 - Extended the stable error-code registry for authenticated sync HTTP adapters with

@@ -28,13 +28,14 @@ NEWKEYS. The engine-independent authentication boundary supplies Ed25519, P-256,
 bounded OpenSSH certificate parsing and validation, and a host-key trust callback that is called
 only after validation. Security-key requests preserve the OpenSSH application, user-presence and
 user-verification flags, and authenticator counter while rejecting malformed or unbounded input.
-The agent boundary provides bounded request-identities and sign request/response codecs,
-transport-neutral client calls, and server dispatch that maps key-store errors to the opaque SSH
-agent failure response. `FramedAgentChannel` applies bounded read/write framing over a blocking
-stream, with platform constructors for Unix-domain sockets and Windows named pipes. Pageant
-compatibility and agent forwarding remain open; bounded remove-all, smart-card load and removal,
-lock, and unlock requests are also dispatched with opaque failure mapping. The concrete SSH
-transport, remaining authentication methods, channel engine, SFTP, and interoperability work remain open.
+The agent boundary provides bounded request-identities, signing, identity management, smart-card,
+lock, unlock, and `SSH_AGENTC_EXTENSION` request/response codecs, transport-neutral client calls,
+and server dispatch that maps key-store errors to opaque failures. `FramedAgentChannel` applies
+bounded read/write framing over a blocking stream, with platform constructors for Unix-domain
+sockets and Windows named pipes. The forwarded-agent adapter reassembles fragmented and multi-frame
+channel data, applies the fail-closed per-profile authorizer, and bounds response count and
+channel-data fragments. Pageant compatibility and SSH `auth-agent` channel integration remain
+open. The concrete SSH transport, channel engine, and interoperability work remain open.
 The agent server can consume
 multiple bounded frames from a blocking stream through clean peer close while applying the same
 malformed and oversized-frame checks.
@@ -44,8 +45,8 @@ boundary until its algorithm-specific fields have a dedicated contract.
 Agent message debug output reports only bounded lengths and non-sensitive metadata, so signing
 payloads and lock credentials are not emitted through ordinary diagnostics.
 Forwarded agent serving uses an explicit per-profile policy that is disabled by default and invokes
-an authorizer for each signature before the key store; the SSH `auth-agent` channel integration is
-still open.
+an authorizer for each signature before the key store; management and extension requests are
+rejected on a forwarded channel. The SSH `auth-agent` channel integration remains open.
 The channel boundary exposes bounded RFC 4254 channel-open, data, lifecycle, session-request, and
 global forwarding codecs, including direct and forwarded TCP, Unix streamlocal, and agent-forwarding
 channel types. It validates exact message consumption, field limits, request names, booleans, signal
@@ -55,4 +56,7 @@ The authentication boundary also encodes `none`, `password` and password-change,
 keyboard-interactive exchanges with bounded context, prompt, and response fields; password and
 interactive response bytes are held in zeroizing secret containers. `RsaSshSigner` accepts only RSA
 private keys and binds the selected `rsa-sha2-256` or `rsa-sha2-512` hash to the signature wrapper;
-raw `ssh-rsa` SHA-1 authentication is rejected. Concrete engine integration remains open.
+raw `ssh-rsa` SHA-1 authentication is rejected. The SFTP boundary provides bounded v3 negotiation,
+core open/read/write/close/stat packets, binary-safe handles and extension data, attributes and
+status responses, and request-id correlation for bounded pipelining; full SFTP operations,
+OpenSSH extensions, resume/progress, and engine integration remain open.
