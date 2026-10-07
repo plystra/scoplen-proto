@@ -72,6 +72,8 @@ All notable changes to `scoplen-proto` will be recorded here.
   invalid requests release their reserved ids instead of consuming pipeline capacity.
 - Added bounded SFTP directory and path packets for opendir, readdir, remove, mkdir, rmdir, and
   realpath, including `NAME` entry responses and client builders with request-correlation tests.
+- Added bounded SFTP metadata and symbolic-link packets for setstat, fsetstat, readlink, and
+  symlink, with client builders and malformed and invalid-value coverage.
 - Added the stable HTTP error-code registry and RFC 9457 problem details with JSON and deterministic
   CBOR codecs, including malformed-input tests and a published CBOR vector.
 - Extended the stable error-code registry for authenticated sync HTTP adapters with
