@@ -23,7 +23,9 @@ boundaries. `TcpTransport` limits host resolution, uses bounded RFC 8305 style s
 Eyeballs attempts under one total connect timeout, and enables `TCP_NODELAY`; its synchronous
 boundary cancels and joins all async attempts before returning. `Socks5Transport` and `HttpConnectTransport` add bounded no-auth SOCKS5 and HTTP
 CONNECT proxy composition with handshake-only socket timeouts. The transports do not perform SSH
-negotiation or authentication. Software Ed25519, P-256, and
+negotiation or authentication. `ProxyCommandTransport` provides bounded direct child-process
+stdin/stdout composition without shell interpolation and reaps the child on shutdown or drop.
+Software Ed25519, P-256, and
 RSA/SHA-2 signers, FIDO2 security-key hooks, RFC 4252 `none`, password and keyboard-interactive
 codecs, certificate validation, and host-verification callbacks are available. Agent support
 includes bounded Unix-socket and Windows named-pipe streams, Pageant named-pipe compatibility,

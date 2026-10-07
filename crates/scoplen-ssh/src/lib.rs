@@ -15,6 +15,7 @@ mod agent;
 mod authentication;
 mod channels;
 mod policy;
+mod process;
 mod proxy;
 mod russh_adapter;
 mod security_key;
@@ -61,6 +62,10 @@ pub use channels::{
     MAX_CHANNEL_STRING, MAX_CHANNEL_TEXT, MAX_PTY_MODES, PtyRequest, Signal, WindowChangeRequest,
 };
 pub use policy::{AlgorithmCategory, AlgorithmPolicyError, HostAlgorithmPolicy};
+pub use process::{
+    MAX_PROXY_COMMAND_ARGUMENT, MAX_PROXY_COMMAND_ARGUMENTS, MAX_PROXY_COMMAND_PROGRAM,
+    ProxyCommandError, ProxyCommandTransport,
+};
 pub use proxy::{
     HttpConnectTransport, MAX_HTTP_CONNECT_RESPONSE, MAX_PROXY_HOST, ProxyError, ProxyOperation,
     ProxyProtocol, ProxyTransportError, Socks5Transport,
