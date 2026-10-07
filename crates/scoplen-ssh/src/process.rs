@@ -264,13 +264,13 @@ fn reap_child(child: &mut Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{env, ffi::OsString};
+    use std::ffi::OsString;
 
     fn echo_command() -> (OsString, Vec<OsString>) {
         #[cfg(windows)]
         {
             (
-                env::var_os("ComSpec").unwrap_or_else(|| OsString::from("cmd.exe")),
+                std::env::var_os("ComSpec").unwrap_or_else(|| OsString::from("cmd.exe")),
                 vec![OsString::from("/C"), OsString::from("more")],
             )
         }
