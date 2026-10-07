@@ -38,6 +38,14 @@ const FXP_ATTRS: u8 = 105;
 const FXP_EXTENDED: u8 = 200;
 const FXP_EXTENDED_REPLY: u8 = 201;
 const LIMITS_EXTENSION: &[u8] = b"limits@openssh.com";
+const POSIX_RENAME_EXTENSION: &[u8] = b"posix-rename@openssh.com";
+const STATVFS_EXTENSION: &[u8] = b"statvfs@openssh.com";
+const FSTATVFS_EXTENSION: &[u8] = b"fstatvfs@openssh.com";
+const HARDLINK_EXTENSION: &[u8] = b"hardlink@openssh.com";
+const FSYNC_EXTENSION: &[u8] = b"fsync@openssh.com";
+const LSETSTAT_EXTENSION: &[u8] = b"lsetstat@openssh.com";
+const EXPAND_PATH_EXTENSION: &[u8] = b"expand-path@openssh.com";
+const COPY_DATA_EXTENSION: &[u8] = b"copy-data";
 
 const ATTR_SIZE: u32 = 0x0000_0001;
 const ATTR_UIDGID: u32 = 0x0000_0002;
@@ -142,6 +150,87 @@ pub struct SftpLimits {
     pub max_write_length: u64,
     /// Maximum number of simultaneously open handles.
     pub max_open_handles: u64,
+}
+
+/// Filesystem statistics returned by `statvfs@openssh.com` and `fstatvfs@openssh.com`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SftpStatvfs {
+    /// File-system block size.
+    pub block_size: u64,
+    /// Fundamental file-system block size.
+    pub fragment_size: u64,
+    /// Total data blocks in the file system.
+    pub blocks: u64,
+    /// Free blocks in the file system.
+    pub free_blocks: u64,
+    /// Blocks available to unprivileged users.
+    pub available_blocks: u64,
+    /// Total file nodes in the file system.
+    pub files: u64,
+    /// Free file nodes in the file system.
+    pub free_files: u64,
+    /// File nodes available to unprivileged users.
+    pub available_files: u64,
+    /// File-system identifier.
+    pub filesystem_id: u64,
+    /// Mount flags.
+    pub flags: u64,
+    /// Maximum filename length.
+    pub name_max: u64,
+}
+
+impl SftpStatvfs {
+    /// Encode the extension-specific response body.
+    #[must_use]
+    pub fn encode(self) -> Vec<u8> {
+        let values = [
+            self.block_size,
+            self.fragment_size,
+            self.blocks,
+            self.free_blocks,
+            self.available_blocks,
+            self.files,
+            self.free_files,
+            self.available_files,
+            self.filesystem_id,
+            self.flags,
+            self.name_max,
+        ];
+        let mut output = Vec::with_capacity(values.len() * 8);
+        for value in values {
+            output.extend_from_slice(&value.to_be_bytes());
+        }
+        output
+    }
+
+    /// Decode exactly one extension-specific response body.
+    pub fn decode(input: &[u8]) -> Result<Self, SftpError> {
+        if input.len() != 11 * 8 {
+            return Err(SftpError::Malformed("statvfs response"));
+        }
+        let mut values = [0_u64; 11];
+        for (index, value) in values.iter_mut().enumerate() {
+            let start = index * 8;
+            *value = u64::from_be_bytes(
+                input[start..start + 8]
+                    .try_into()
+                    .map_err(|_| SftpError::Malformed("statvfs response"))?,
+            );
+        }
+        Ok(Self {
+            block_size: values[0],
+            fragment_size: values[1],
+            blocks: values[2],
+            free_blocks: values[3],
+            available_blocks: values[4],
+            files: values[5],
+            free_files: values[6],
+            available_files: values[7],
+            filesystem_id: values[8],
+            flags: values[9],
+            name_max: values[10],
+        })
+    }
 }
 
 impl SftpLimits {
@@ -738,6 +827,136 @@ impl SftpPacket {
             _ => Err(SftpError::Malformed("expected limits response")),
         }
     }
+
+    /// Construct a `posix-rename@openssh.com` request.
+    pub fn posix_rename_request(
+        id: u32,
+        old_path: impl Into<Vec<u8>>,
+        new_path: impl Into<Vec<u8>>,
+    ) -> Result<Self, SftpError> {
+        let old_path = old_path.into();
+        let new_path = new_path.into();
+        extended_request(id, POSIX_RENAME_EXTENSION, |encoder| {
+            validate_string(&old_path, "old path", false)?;
+            validate_string(&new_path, "new path", false)?;
+            encoder.string(&old_path, MAX_SFTP_STRING, "old path")?;
+            encoder.string(&new_path, MAX_SFTP_STRING, "new path")?;
+            Ok(())
+        })
+    }
+
+    /// Construct a `statvfs@openssh.com` request.
+    pub fn statvfs_request(id: u32, path: impl Into<Vec<u8>>) -> Result<Self, SftpError> {
+        let path = path.into();
+        extended_request(id, STATVFS_EXTENSION, |encoder| {
+            validate_string(&path, "path", false)?;
+            encoder.string(&path, MAX_SFTP_STRING, "path")?;
+            Ok(())
+        })
+    }
+
+    /// Construct an `fstatvfs@openssh.com` request.
+    pub fn fstatvfs_request(id: u32, handle: impl Into<Vec<u8>>) -> Result<Self, SftpError> {
+        let handle = handle.into();
+        extended_request(id, FSTATVFS_EXTENSION, |encoder| {
+            validate_opaque(&handle, MAX_SFTP_HANDLE, "handle", false)?;
+            encoder.string(&handle, MAX_SFTP_HANDLE, "handle")?;
+            Ok(())
+        })
+    }
+
+    /// Construct a `hardlink@openssh.com` request.
+    pub fn hardlink_request(
+        id: u32,
+        old_path: impl Into<Vec<u8>>,
+        new_path: impl Into<Vec<u8>>,
+    ) -> Result<Self, SftpError> {
+        let old_path = old_path.into();
+        let new_path = new_path.into();
+        extended_request(id, HARDLINK_EXTENSION, |encoder| {
+            validate_string(&old_path, "old path", false)?;
+            validate_string(&new_path, "new path", false)?;
+            encoder.string(&old_path, MAX_SFTP_STRING, "old path")?;
+            encoder.string(&new_path, MAX_SFTP_STRING, "new path")?;
+            Ok(())
+        })
+    }
+
+    /// Construct an `fsync@openssh.com` request.
+    pub fn fsync_request(id: u32, handle: impl Into<Vec<u8>>) -> Result<Self, SftpError> {
+        let handle = handle.into();
+        extended_request(id, FSYNC_EXTENSION, |encoder| {
+            validate_opaque(&handle, MAX_SFTP_HANDLE, "handle", false)?;
+            encoder.string(&handle, MAX_SFTP_HANDLE, "handle")?;
+            Ok(())
+        })
+    }
+
+    /// Construct an `lsetstat@openssh.com` request.
+    pub fn lsetstat_request(
+        id: u32,
+        path: impl Into<Vec<u8>>,
+        attrs: &SftpAttributes,
+    ) -> Result<Self, SftpError> {
+        let path = path.into();
+        extended_request(id, LSETSTAT_EXTENSION, |encoder| {
+            validate_string(&path, "path", false)?;
+            encoder.string(&path, MAX_SFTP_STRING, "path")?;
+            attrs.encode_into(encoder)
+        })
+    }
+
+    /// Construct an `expand-path@openssh.com` request.
+    pub fn expand_path_request(id: u32, path: impl Into<Vec<u8>>) -> Result<Self, SftpError> {
+        let path = path.into();
+        extended_request(id, EXPAND_PATH_EXTENSION, |encoder| {
+            validate_string(&path, "path", false)?;
+            encoder.string(&path, MAX_SFTP_STRING, "path")?;
+            Ok(())
+        })
+    }
+
+    /// Construct a `copy-data` request between two open handles.
+    pub fn copy_data_request(
+        id: u32,
+        read_handle: impl Into<Vec<u8>>,
+        read_offset: u64,
+        read_length: u64,
+        write_handle: impl Into<Vec<u8>>,
+        write_offset: u64,
+    ) -> Result<Self, SftpError> {
+        let read_handle = read_handle.into();
+        let write_handle = write_handle.into();
+        extended_request(id, COPY_DATA_EXTENSION, |encoder| {
+            validate_opaque(&read_handle, MAX_SFTP_HANDLE, "read handle", false)?;
+            validate_opaque(&write_handle, MAX_SFTP_HANDLE, "write handle", false)?;
+            encoder.string(&read_handle, MAX_SFTP_HANDLE, "read handle")?;
+            encoder.u64(read_offset);
+            encoder.u64(read_length);
+            encoder.string(&write_handle, MAX_SFTP_HANDLE, "write handle")?;
+            encoder.u64(write_offset);
+            Ok(())
+        })
+    }
+
+    /// Decode a `statvfs@openssh.com` or `fstatvfs@openssh.com` response.
+    pub fn statvfs_response(&self) -> Result<SftpStatvfs, SftpError> {
+        match self {
+            Self::ExtendedReply { data, .. } => SftpStatvfs::decode(data),
+            _ => Err(SftpError::Malformed("expected statvfs response")),
+        }
+    }
+}
+
+fn extended_request<F>(id: u32, name: &[u8], build: F) -> Result<SftpPacket, SftpError>
+where
+    F: FnOnce(&mut Encoder) -> Result<(), SftpError>,
+{
+    validate_string(name, "extension name", false)?;
+    let mut encoder = Encoder::new();
+    build(&mut encoder)?;
+    validate_opaque(&encoder.body, MAX_SFTP_EXTENSION_DATA, "extension data", true)?;
+    Ok(SftpPacket::Extended { id, name: name.to_vec(), data: encoder.body })
 }
 
 /// Small state machine for a v3 client with bounded pipelining.
@@ -906,6 +1125,85 @@ impl SftpClient {
         self.queue(SftpPacket::limits_request)
     }
 
+    /// Queue a `posix-rename@openssh.com` request.
+    pub fn posix_rename(
+        &mut self,
+        old_path: impl Into<Vec<u8>>,
+        new_path: impl Into<Vec<u8>>,
+    ) -> Result<SftpPacket, SftpError> {
+        let old_path = old_path.into();
+        let new_path = new_path.into();
+        self.queue_result(|id| SftpPacket::posix_rename_request(id, old_path, new_path))
+    }
+
+    /// Queue a `statvfs@openssh.com` request.
+    pub fn statvfs(&mut self, path: impl Into<Vec<u8>>) -> Result<SftpPacket, SftpError> {
+        let path = path.into();
+        self.queue_result(|id| SftpPacket::statvfs_request(id, path))
+    }
+
+    /// Queue an `fstatvfs@openssh.com` request.
+    pub fn fstatvfs(&mut self, handle: impl Into<Vec<u8>>) -> Result<SftpPacket, SftpError> {
+        let handle = handle.into();
+        self.queue_result(|id| SftpPacket::fstatvfs_request(id, handle))
+    }
+
+    /// Queue a `hardlink@openssh.com` request.
+    pub fn hardlink(
+        &mut self,
+        old_path: impl Into<Vec<u8>>,
+        new_path: impl Into<Vec<u8>>,
+    ) -> Result<SftpPacket, SftpError> {
+        let old_path = old_path.into();
+        let new_path = new_path.into();
+        self.queue_result(|id| SftpPacket::hardlink_request(id, old_path, new_path))
+    }
+
+    /// Queue an `fsync@openssh.com` request.
+    pub fn fsync(&mut self, handle: impl Into<Vec<u8>>) -> Result<SftpPacket, SftpError> {
+        let handle = handle.into();
+        self.queue_result(|id| SftpPacket::fsync_request(id, handle))
+    }
+
+    /// Queue an `lsetstat@openssh.com` request.
+    pub fn lsetstat(
+        &mut self,
+        path: impl Into<Vec<u8>>,
+        attrs: &SftpAttributes,
+    ) -> Result<SftpPacket, SftpError> {
+        let path = path.into();
+        self.queue_result(|id| SftpPacket::lsetstat_request(id, path, attrs))
+    }
+
+    /// Queue an `expand-path@openssh.com` request.
+    pub fn expand_path(&mut self, path: impl Into<Vec<u8>>) -> Result<SftpPacket, SftpError> {
+        let path = path.into();
+        self.queue_result(|id| SftpPacket::expand_path_request(id, path))
+    }
+
+    /// Queue a `copy-data` request between two open handles.
+    pub fn copy_data(
+        &mut self,
+        read_handle: impl Into<Vec<u8>>,
+        read_offset: u64,
+        read_length: u64,
+        write_handle: impl Into<Vec<u8>>,
+        write_offset: u64,
+    ) -> Result<SftpPacket, SftpError> {
+        let read_handle = read_handle.into();
+        let write_handle = write_handle.into();
+        self.queue_result(|id| {
+            SftpPacket::copy_data_request(
+                id,
+                read_handle,
+                read_offset,
+                read_length,
+                write_handle,
+                write_offset,
+            )
+        })
+    }
+
     /// Accept a response and release its request id.
     pub fn accept_response(&mut self, packet: &SftpPacket) -> Result<(), SftpError> {
         let Some(id) = packet.request_id() else {
@@ -924,8 +1222,21 @@ impl SftpClient {
     where
         F: FnOnce(u32) -> SftpPacket,
     {
+        self.queue_result(|id| Ok(build(id)))
+    }
+
+    fn queue_result<F>(&mut self, build: F) -> Result<SftpPacket, SftpError>
+    where
+        F: FnOnce(u32) -> Result<SftpPacket, SftpError>,
+    {
         let id = self.reserve_request_id()?;
-        let packet = build(id);
+        let packet = match build(id) {
+            Ok(packet) => packet,
+            Err(error) => {
+                self.pending.remove(&id);
+                return Err(error);
+            }
+        };
         if let Err(error) = packet.encode() {
             self.pending.remove(&id);
             return Err(error);
@@ -1355,6 +1666,59 @@ mod tests {
     }
 
     #[test]
+    fn openssh_extension_requests_and_statvfs_response_are_bounded() {
+        let rename = SftpPacket::posix_rename_request(1, b"/old", b"/new").unwrap();
+        let SftpPacket::Extended { id, name, data } = rename else { panic!("rename packet") };
+        assert_eq!(id, 1);
+        assert_eq!(name, b"posix-rename@openssh.com");
+        let mut reader = Reader::new(&data);
+        assert_eq!(reader.bytes(MAX_SFTP_STRING, "old path", false).unwrap(), b"/old");
+        assert_eq!(reader.bytes(MAX_SFTP_STRING, "new path", false).unwrap(), b"/new");
+        reader.finish().unwrap();
+
+        let copy = SftpPacket::copy_data_request(2, b"read", 7, 99, b"write", 12).unwrap();
+        let SftpPacket::Extended { name, data, .. } = copy else { panic!("copy packet") };
+        assert_eq!(name, b"copy-data");
+        let mut reader = Reader::new(&data);
+        assert_eq!(reader.opaque(MAX_SFTP_HANDLE, "read handle", false).unwrap(), b"read");
+        assert_eq!(reader.u64("read offset").unwrap(), 7);
+        assert_eq!(reader.u64("read length").unwrap(), 99);
+        assert_eq!(reader.opaque(MAX_SFTP_HANDLE, "write handle", false).unwrap(), b"write");
+        assert_eq!(reader.u64("write offset").unwrap(), 12);
+        reader.finish().unwrap();
+
+        let stats = SftpStatvfs {
+            block_size: 1,
+            fragment_size: 2,
+            blocks: 3,
+            free_blocks: 4,
+            available_blocks: 5,
+            files: 6,
+            free_files: 7,
+            available_files: 8,
+            filesystem_id: 9,
+            flags: 10,
+            name_max: 11,
+        };
+        let response = SftpPacket::ExtendedReply { id: 3, data: stats.encode() };
+        assert_eq!(response.statvfs_response(), Ok(stats));
+        assert_eq!(SftpStatvfs::decode(&[0; 87]), Err(SftpError::Malformed("statvfs response")));
+        assert_eq!(
+            SftpPacket::Status { id: 3, code: 0, message: Vec::new(), language: Vec::new() }
+                .statvfs_response(),
+            Err(SftpError::Malformed("expected statvfs response"))
+        );
+        assert_eq!(
+            SftpPacket::statvfs_request(4, Vec::new()),
+            Err(SftpError::InvalidValue("path"))
+        );
+        assert_eq!(
+            SftpPacket::fsync_request(5, Vec::new()),
+            Err(SftpError::InvalidValue("handle"))
+        );
+    }
+
+    #[test]
     fn client_builders_track_valid_requests_and_release_invalid_ids() {
         let mut client = SftpClient::new(5).unwrap();
         client.accept_version(&SftpPacket::Version { version: 3, extensions: Vec::new() }).unwrap();
@@ -1405,5 +1769,24 @@ mod tests {
             Err(SftpError::InvalidValue("handle"))
         );
         assert_eq!(client.pending_requests(), 4);
+    }
+
+    #[test]
+    fn client_extension_builders_correlate_and_release_invalid_ids() {
+        let mut client = SftpClient::new(9).unwrap();
+        client.accept_version(&SftpPacket::Version { version: 3, extensions: Vec::new() }).unwrap();
+        assert_eq!(client.posix_rename(b"/old", b"/new").unwrap().request_id(), Some(1));
+        assert_eq!(client.statvfs(b"/").unwrap().request_id(), Some(2));
+        assert_eq!(client.fstatvfs(b"h").unwrap().request_id(), Some(3));
+        assert_eq!(client.hardlink(b"/a", b"/b").unwrap().request_id(), Some(4));
+        assert_eq!(client.fsync(b"h").unwrap().request_id(), Some(5));
+        assert_eq!(
+            client.lsetstat(b"/a", &SftpAttributes::default()).unwrap().request_id(),
+            Some(6)
+        );
+        assert_eq!(client.expand_path(b"~").unwrap().request_id(), Some(7));
+        assert_eq!(client.copy_data(b"r", 0, 10, b"w", 5).unwrap().request_id(), Some(8));
+        assert_eq!(client.statvfs(Vec::new()), Err(SftpError::InvalidValue("path")));
+        assert_eq!(client.pending_requests(), 8);
     }
 }

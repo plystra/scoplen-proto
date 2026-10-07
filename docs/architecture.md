@@ -61,6 +61,8 @@ raw `ssh-rsa` SHA-1 authentication is rejected. The SFTP boundary provides bound
 core open/read/write/close/stat packets, directory and path operations (opendir, readdir, remove,
 mkdir, rmdir, and realpath), metadata and symbolic-link operations (setstat, fsetstat, readlink,
 and symlink), binary-safe handles and extension data, attributes, status, and directory-entry
-responses, request-id correlation for bounded pipelining, and the OpenSSH `limits@openssh.com`
-request and response; full SFTP operations, the remaining OpenSSH extensions, resume/progress, and
-engine integration remain open.
+responses, request-id correlation for bounded pipelining, and the OpenSSH `limits@openssh.com`,
+`posix-rename@openssh.com`, `statvfs@openssh.com`, `fstatvfs@openssh.com`, `hardlink@openssh.com`,
+`fsync@openssh.com`, `lsetstat@openssh.com`, `expand-path@openssh.com`, and `copy-data`
+requests and responses. Concrete russh channel integration, transfer resume/progress, and the
+interoperability matrix remain open.

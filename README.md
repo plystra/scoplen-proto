@@ -25,10 +25,12 @@ identity and signing requests, add/remove/lock/smart-card management, opaque ext
 fail-closed forwarding policy.
 Bounded RFC 4254 channel codecs cover session and forwarding requests. A bounded SFTP v3 packet
 boundary covers negotiation, core file, directory/path, and metadata requests and responses, bounded
-request correlation, and the OpenSSH `limits@openssh.com` extension, with binary-safe handles and extension
-data. These are protocol boundaries; concrete russh connection
-and channel engines, legacy Pageant WM_COPYDATA discovery, SSH `auth-agent` channel integration,
-full SFTP operations and extensions, dynamic SOCKS listeners, and interoperability work remain open.
+request correlation, and the OpenSSH `limits@openssh.com`, `posix-rename@openssh.com`,
+`statvfs@openssh.com`, `fstatvfs@openssh.com`, `hardlink@openssh.com`, `fsync@openssh.com`,
+`lsetstat@openssh.com`, `expand-path@openssh.com`, and `copy-data` extensions, with binary-safe
+handles and extension data. These are protocol boundaries; concrete russh connection and channel
+engines, legacy Pageant WM_COPYDATA discovery, SSH `auth-agent` channel integration, transfer
+resume/progress, dynamic SOCKS listeners, and interoperability work remain open.
 The `scoplen-api` crate exposes the K-3 error-code registry, RFC 9457 problem details, and device
 challenge, signed-device request, and token response JSON codecs, plus K-4 session, change-feed,
 write-batch, acknowledgement, snapshot, version-history, content-free notification, and account
