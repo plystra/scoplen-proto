@@ -10,8 +10,9 @@
 use std::{borrow::Cow, fmt, str, sync::Arc, time::Duration};
 
 use russh::{
-    ChannelMsg, Pty,
+    ChannelMsg, Pty, Signer as RusshSigner,
     client::{self, Handler},
+    keys::agent::AgentIdentity,
     keys::{Algorithm, EcdsaCurve, HashAlg, PublicKeyOrCertificate},
 };
 use scoplen_crypto::SecretVec;
@@ -21,11 +22,14 @@ use zeroize::Zeroize;
 
 use crate::{
     CertificateValidationPolicy, ExtendedDataType, HostKeyVerificationError, HostKeyVerifier,
-    MAX_CHANNEL_TEXT, PtyRequest, verify_host_key,
+    MAX_CHANNEL_TEXT, PtyRequest, PublicKeyAuthContext, PublicKeyAuthRequest, PublicKeyIdentity,
+    SignatureAlgorithm, Signer, SignerError, verify_host_key,
 };
 
 const MAX_CLIENT_HOST: usize = 4096;
 const MAX_CERTIFICATE_PRINCIPAL: usize = 4096;
+const MAX_PUBLICKEY_AUTH_PAYLOAD: usize = 256 * 1024;
+const USERAUTH_REQUEST: u8 = 50;
 
 /// Errors raised while creating a concrete SSH client configuration.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -252,6 +256,9 @@ pub enum ClientError {
         /// Whether the server accepted the method as a partial multi-factor step.
         partial_success: bool,
     },
+    /// The public-key signer or its session-bound request was invalid.
+    #[error("SSH public-key authentication could not be completed: {0}")]
+    PublicKey(#[from] PublicKeyAuthError),
     /// The server requires authentication before the requested channel operation.
     #[error("SSH authentication is required")]
     NotAuthenticated,
@@ -279,6 +286,23 @@ pub enum ClientError {
     /// A channel event belongs to an engine-internal request rather than a peer response.
     #[error("unexpected SSH channel event")]
     UnexpectedChannelEvent,
+}
+
+/// Errors raised while adapting the engine-independent signer to `russh`.
+#[derive(Debug, Error)]
+pub enum PublicKeyAuthError {
+    /// The signer failed while producing a key or signature.
+    #[error(transparent)]
+    Signer(#[from] SignerError),
+    /// The russh event loop could not receive the signature response.
+    #[error("SSH event loop is unavailable")]
+    Send(#[from] russh::SendError),
+    /// A payload supplied by russh did not have the RFC 4252 shape expected by the shared core.
+    #[error("malformed russh public-key signing payload: {0}")]
+    MalformedPayload(&'static str),
+    /// The engine asked the signer to sign with a different key than the offered identity.
+    #[error("russh public-key identity does not match the signer")]
+    KeyMismatch,
 }
 
 impl From<russh::Error> for ClientError {
@@ -336,6 +360,41 @@ impl ClientConnection {
         let handle =
             client::connect_stream(Arc::new(config.russh_config()), stream, handler).await?;
         Ok(Self { handle })
+    }
+
+    /// Authenticate with a session-bound RFC 4252 public-key request.
+    ///
+    /// The private key stays behind [`Signer`]. `russh` supplies the exact bytes it is about to
+    /// sign; the adapter parses those bytes into [`PublicKeyAuthRequest`] before asking the signer
+    /// to produce the signature. This keeps the concrete engine on the same algorithm, identity,
+    /// and session-binding boundary as the engine-independent implementation.
+    pub async fn authenticate_publickey<S>(
+        &mut self,
+        username: &str,
+        signer: &S,
+    ) -> Result<(), ClientError>
+    where
+        S: Signer + Sync,
+    {
+        validate_text(username.as_bytes(), MAX_CLIENT_HOST, "username", true)
+            .map_err(ClientError::Config)?;
+        let identity =
+            PublicKeyIdentity::from_signer(signer).map_err(PublicKeyAuthError::Signer)?;
+        let key = ssh_key::PublicKey::from_bytes(identity.key_blob())
+            .map_err(|_| PublicKeyAuthError::MalformedPayload("signer public key"))?;
+        let hash_alg = rsa_hash_algorithm(signer.algorithm());
+        let mut adapter = RusshSignerAdapter { signer, identity, username: username.to_owned() };
+        let result = self
+            .handle
+            .authenticate_publickey_with(username.to_owned(), key, hash_alg, &mut adapter)
+            .await
+            .map_err(ClientError::PublicKey)?;
+        match result {
+            russh::client::AuthResult::Success => Ok(()),
+            russh::client::AuthResult::Failure { partial_success, .. } => {
+                Err(ClientError::AuthenticationRejected { partial_success })
+            }
+        }
     }
 
     /// Authenticate with RFC 4252 password authentication.
@@ -558,6 +617,140 @@ impl ClientChannel {
     }
 }
 
+struct RusshSignerAdapter<'a, S: Signer + Sync> {
+    signer: &'a S,
+    identity: PublicKeyIdentity,
+    username: String,
+}
+
+impl<S: Signer + Sync> RusshSignerAdapter<'_, S> {
+    fn sign_request(
+        &self,
+        presented_key: &AgentIdentity,
+        payload: Vec<u8>,
+    ) -> Result<Vec<u8>, PublicKeyAuthError> {
+        let presented_key = presented_key
+            .public_key()
+            .to_bytes()
+            .map_err(|_| PublicKeyAuthError::MalformedPayload("presented public key"))?;
+        if presented_key != self.identity.signing_key_blob() {
+            return Err(PublicKeyAuthError::KeyMismatch);
+        }
+        let (context, identity) = decode_publickey_payload(&payload)?;
+        if context.username() != self.username || context.service() != "ssh-connection" {
+            return Err(PublicKeyAuthError::MalformedPayload("authentication context changed"));
+        }
+        if identity != self.identity {
+            return Err(PublicKeyAuthError::KeyMismatch);
+        }
+        let request = PublicKeyAuthRequest::signed(context, identity, self.signer)?;
+        if request.signature_payload() != payload {
+            return Err(PublicKeyAuthError::MalformedPayload("session-bound payload changed"));
+        }
+        let signature = request
+            .signature()
+            .ok_or(PublicKeyAuthError::MalformedPayload("missing SSH signature"))?;
+        let mut signed = payload;
+        append_ssh_string(&mut signed, signature)?;
+        Ok(signed)
+    }
+}
+
+impl<S: Signer + Sync> RusshSigner for RusshSignerAdapter<'_, S> {
+    type Error = PublicKeyAuthError;
+
+    fn auth_sign(
+        &mut self,
+        key: &AgentIdentity,
+        _hash_alg: Option<HashAlg>,
+        to_sign: Vec<u8>,
+    ) -> impl std::future::Future<Output = Result<Vec<u8>, Self::Error>> + Send {
+        let result = self.sign_request(key, to_sign);
+        async move { result }
+    }
+}
+
+fn rsa_hash_algorithm(algorithm: SignatureAlgorithm) -> Option<HashAlg> {
+    match algorithm {
+        SignatureAlgorithm::RsaSha2_256 => Some(HashAlg::Sha256),
+        SignatureAlgorithm::RsaSha2_512 => Some(HashAlg::Sha512),
+        SignatureAlgorithm::Ed25519 | SignatureAlgorithm::EcdsaSha2Nistp256 => None,
+    }
+}
+
+fn decode_publickey_payload(
+    payload: &[u8],
+) -> Result<(PublicKeyAuthContext, PublicKeyIdentity), PublicKeyAuthError> {
+    if payload.len() > MAX_PUBLICKEY_AUTH_PAYLOAD {
+        return Err(PublicKeyAuthError::MalformedPayload("payload is too large"));
+    }
+    let mut rest = payload;
+    let session_id = read_ssh_string(&mut rest, "session identifier")?;
+    let message = rest
+        .first()
+        .copied()
+        .ok_or(PublicKeyAuthError::MalformedPayload("missing userauth message"))?;
+    rest = &rest[1..];
+    if message != USERAUTH_REQUEST {
+        return Err(PublicKeyAuthError::MalformedPayload("unexpected userauth message"));
+    }
+    let username = read_ssh_string(&mut rest, "username")?;
+    let service = read_ssh_string(&mut rest, "service")?;
+    let method = read_ssh_string(&mut rest, "method")?;
+    if method != b"publickey" {
+        return Err(PublicKeyAuthError::MalformedPayload("unexpected authentication method"));
+    }
+    if rest.first().copied() != Some(1) {
+        return Err(PublicKeyAuthError::MalformedPayload("unsigned public-key payload"));
+    }
+    rest = &rest[1..];
+    let algorithm = read_ssh_string(&mut rest, "algorithm")?;
+    let algorithm = str::from_utf8(algorithm)
+        .map_err(|_| PublicKeyAuthError::MalformedPayload("algorithm is not UTF-8"))?;
+    let key_blob = read_ssh_string(&mut rest, "public key")?;
+    if !rest.is_empty() {
+        return Err(PublicKeyAuthError::MalformedPayload("payload has trailing bytes"));
+    }
+    let username = str::from_utf8(username)
+        .map_err(|_| PublicKeyAuthError::MalformedPayload("username is not UTF-8"))?;
+    let service = str::from_utf8(service)
+        .map_err(|_| PublicKeyAuthError::MalformedPayload("service is not UTF-8"))?;
+    let context = PublicKeyAuthContext::new(session_id.to_vec(), username, service)
+        .map_err(PublicKeyAuthError::Signer)?;
+    let identity =
+        PublicKeyIdentity::new(algorithm, key_blob.to_vec()).map_err(PublicKeyAuthError::Signer)?;
+    Ok((context, identity))
+}
+
+fn read_ssh_string<'a>(
+    input: &mut &'a [u8],
+    field: &'static str,
+) -> Result<&'a [u8], PublicKeyAuthError> {
+    let length = input
+        .get(..4)
+        .ok_or(PublicKeyAuthError::MalformedPayload("truncated SSH string length"))?;
+    let length = u32::from_be_bytes(
+        length
+            .try_into()
+            .map_err(|_| PublicKeyAuthError::MalformedPayload("invalid SSH string length"))?,
+    ) as usize;
+    if length > MAX_PUBLICKEY_AUTH_PAYLOAD {
+        return Err(PublicKeyAuthError::MalformedPayload(field));
+    }
+    let end = 4usize.checked_add(length).ok_or(PublicKeyAuthError::MalformedPayload(field))?;
+    let value = input.get(4..end).ok_or(PublicKeyAuthError::MalformedPayload(field))?;
+    *input = &input[end..];
+    Ok(value)
+}
+
+fn append_ssh_string(output: &mut Vec<u8>, value: &[u8]) -> Result<(), PublicKeyAuthError> {
+    let length = u32::try_from(value.len())
+        .map_err(|_| PublicKeyAuthError::MalformedPayload("signature is too large"))?;
+    output.extend_from_slice(&length.to_be_bytes());
+    output.extend_from_slice(value);
+    Ok(())
+}
+
 struct ClientHandler {
     host: String,
     host_key_policy: HostKeyPolicy,
@@ -676,12 +869,13 @@ mod tests {
     };
 
     use russh::keys::PrivateKey;
+    use scoplen_crypto::{Ed25519SigningKey, P256SigningKey};
     use ssh_key::Algorithm;
     use tokio::io::duplex;
     use tokio::time::{Duration, timeout};
 
     use super::*;
-    use crate::HostKey;
+    use crate::{Ed25519SshSigner, HostKey, P256SshSigner, RsaSshSigner};
 
     #[test]
     fn config_rejects_empty_host_and_zero_port() {
@@ -758,6 +952,101 @@ mod tests {
         assert!(matches!(
             result,
             Err(ClientError::Protocol | ClientError::ConnectionClosed | ClientError::Transport(_))
+        ));
+    }
+
+    async fn assert_publickey_adapter_round_trip<S>(signer: &S)
+    where
+        S: Signer + Sync,
+    {
+        let identity = PublicKeyIdentity::from_signer(signer).expect("identity");
+        let context =
+            PublicKeyAuthContext::new([3; 32], "alice", "ssh-connection").expect("context");
+        let probe = PublicKeyAuthRequest::probe(context.clone(), identity.clone()).expect("probe");
+        let payload = probe.signature_payload();
+        let expected = PublicKeyAuthRequest::signed(context, identity.clone(), signer)
+            .expect("signed request");
+        let expected_signature = expected.signature().expect("signature");
+        let public_key =
+            ssh_key::PublicKey::from_bytes(identity.signing_key_blob()).expect("public key");
+        let agent_identity = AgentIdentity::from(public_key);
+        let mut adapter = RusshSignerAdapter { signer, identity, username: "alice".to_owned() };
+        let signed_payload = <RusshSignerAdapter<'_, S> as RusshSigner>::auth_sign(
+            &mut adapter,
+            &agent_identity,
+            rsa_hash_algorithm(signer.algorithm()),
+            payload.clone(),
+        )
+        .await
+        .expect("adapter signs");
+        assert!(signed_payload.starts_with(&payload));
+        let suffix = &signed_payload[payload.len()..];
+        let length = u32::from_be_bytes(suffix[..4].try_into().expect("length")) as usize;
+        assert_eq!(length, expected_signature.len());
+        assert_eq!(&suffix[4..], expected_signature);
+    }
+
+    #[tokio::test]
+    async fn publickey_adapter_uses_shared_boundary_for_ed25519_and_p256() {
+        let ed25519 =
+            Ed25519SshSigner::new(Ed25519SigningKey::from_bytes(&[9; 32]).expect("Ed25519 key"));
+        assert_publickey_adapter_round_trip(&ed25519).await;
+        let p256 = P256SshSigner::new(P256SigningKey::from_bytes(&[1; 32]).expect("P-256 key"));
+        assert_publickey_adapter_round_trip(&p256).await;
+    }
+
+    #[tokio::test]
+    async fn publickey_adapter_uses_selected_rsa_sha2_algorithm() {
+        let mut rng = ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng);
+        let key = PrivateKey::random(&mut rng, Algorithm::Rsa { hash: None }).expect("RSA key");
+        let signer = RsaSshSigner::new(key, SignatureAlgorithm::RsaSha2_512).expect("RSA signer");
+        assert_publickey_adapter_round_trip(&signer).await;
+    }
+
+    #[tokio::test]
+    async fn publickey_adapter_rejects_malformed_payload_and_key_substitution() {
+        let signer =
+            Ed25519SshSigner::new(Ed25519SigningKey::from_bytes(&[9; 32]).expect("Ed25519 key"));
+        let identity = PublicKeyIdentity::from_signer(&signer).expect("identity");
+        let public_key =
+            ssh_key::PublicKey::from_bytes(identity.signing_key_blob()).expect("public key");
+        let agent_identity = AgentIdentity::from(public_key);
+        let mut adapter =
+            RusshSignerAdapter { signer: &signer, identity, username: "alice".to_owned() };
+        assert!(matches!(
+            <RusshSignerAdapter<'_, Ed25519SshSigner> as RusshSigner>::auth_sign(
+                &mut adapter,
+                &agent_identity,
+                None,
+                vec![0; 4],
+            )
+            .await,
+            Err(PublicKeyAuthError::MalformedPayload(_))
+        ));
+
+        let other = Ed25519SshSigner::new(
+            Ed25519SigningKey::from_bytes(&[8; 32]).expect("other Ed25519 key"),
+        );
+        let identity = PublicKeyIdentity::from_signer(&signer).expect("identity");
+        let context =
+            PublicKeyAuthContext::new([3; 32], "alice", "ssh-connection").expect("context");
+        let payload = PublicKeyAuthRequest::probe(context, identity.clone())
+            .expect("probe")
+            .signature_payload();
+        let other_identity = PublicKeyIdentity::from_signer(&other).expect("other identity");
+        let other_key = ssh_key::PublicKey::from_bytes(other_identity.signing_key_blob())
+            .expect("other public key");
+        let mut adapter =
+            RusshSignerAdapter { signer: &signer, identity, username: "alice".to_owned() };
+        assert!(matches!(
+            <RusshSignerAdapter<'_, Ed25519SshSigner> as RusshSigner>::auth_sign(
+                &mut adapter,
+                &AgentIdentity::from(other_key),
+                None,
+                payload,
+            )
+            .await,
+            Err(PublicKeyAuthError::KeyMismatch)
         ));
     }
 }
