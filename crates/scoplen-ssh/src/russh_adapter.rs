@@ -26,7 +26,7 @@ use russh::{
 use scoplen_crypto::SecretVec;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use zeroize::Zeroize;
 
 use crate::{
@@ -368,6 +368,7 @@ pub struct ClientConnection {
     handle: client::Handle<ClientHandler>,
     channel_slots: Arc<Semaphore>,
     channel_limit: usize,
+    forwarded_channels: mpsc::Receiver<ForwardedChannel>,
 }
 
 impl fmt::Debug for ClientConnection {
@@ -379,14 +380,12 @@ impl fmt::Debug for ClientConnection {
 impl ClientConnection {
     /// Connect to the configured TCP endpoint and complete SSH key exchange.
     pub async fn connect(config: ClientConfig) -> Result<Self, ClientError> {
-        let handler = ClientHandler::new(&config);
+        let channel_slots = Arc::new(Semaphore::new(config.channel_limit));
+        let (forwarded_tx, forwarded_channels) = mpsc::channel(config.channel_limit);
+        let handler = ClientHandler::new(&config, Arc::clone(&channel_slots), forwarded_tx);
         let address = (config.host.clone(), config.port);
         let handle = client::connect(Arc::new(config.russh_config()), address, handler).await?;
-        Ok(Self {
-            handle,
-            channel_slots: Arc::new(Semaphore::new(config.channel_limit)),
-            channel_limit: config.channel_limit,
-        })
+        Ok(Self { handle, channel_slots, channel_limit: config.channel_limit, forwarded_channels })
     }
 
     /// Connect over a caller-provided byte stream and complete SSH key exchange.
@@ -394,14 +393,12 @@ impl ClientConnection {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        let handler = ClientHandler::new(&config);
+        let channel_slots = Arc::new(Semaphore::new(config.channel_limit));
+        let (forwarded_tx, forwarded_channels) = mpsc::channel(config.channel_limit);
+        let handler = ClientHandler::new(&config, Arc::clone(&channel_slots), forwarded_tx);
         let handle =
             client::connect_stream(Arc::new(config.russh_config()), stream, handler).await?;
-        Ok(Self {
-            handle,
-            channel_slots: Arc::new(Semaphore::new(config.channel_limit)),
-            channel_limit: config.channel_limit,
-        })
+        Ok(Self { handle, channel_slots, channel_limit: config.channel_limit, forwarded_channels })
     }
 
     /// Connect to a target through an already connected and authenticated jump host.
@@ -578,6 +575,15 @@ impl ClientConnection {
             .map_err(ClientError::from)
     }
 
+    /// Wait for the next channel opened by the server for an active remote forwarding request.
+    ///
+    /// The queue is bounded by the configured channel limit.  When the caller does not drain
+    /// it, new forwarded channels are rejected with `resource shortage` instead of accumulating
+    /// unbounded channel state in the event loop.  `None` means that the SSH event loop closed.
+    pub async fn next_forwarded_channel(&mut self) -> Option<ForwardedChannel> {
+        self.forwarded_channels.recv().await
+    }
+
     fn channel_permit(&self) -> Result<OwnedSemaphorePermit, ClientError> {
         Arc::clone(&self.channel_slots)
             .try_acquire_owned()
@@ -590,6 +596,71 @@ impl ClientConnection {
             .disconnect(russh::Disconnect::ByApplication, "", "en")
             .await
             .map_err(ClientError::from)
+    }
+}
+
+/// Kind and peer metadata for a server-opened remote forwarding channel.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ForwardedChannelKind {
+    /// A connection accepted by a remote TCP forwarding listener.
+    Tcp {
+        /// Address that accepted the forwarded connection.
+        connected_address: String,
+        /// Port that accepted the forwarded connection.
+        connected_port: u32,
+        /// Address reported by the remote originator.
+        originator_address: String,
+        /// Port reported by the remote originator.
+        originator_port: u32,
+    },
+    /// A connection accepted by a remote Unix-socket forwarding listener.
+    Streamlocal {
+        /// Socket path that accepted the forwarded connection.
+        socket_path: String,
+    },
+}
+
+/// A bounded server-opened channel delivered for a remote forwarding listener.
+///
+/// The caller must consume the channel with [`Self::into_channel`] and then apply its own local
+/// forwarding policy.  Dropping the value closes the engine channel and releases the shared
+/// channel slot.
+pub struct ForwardedChannel {
+    channel: ClientChannel,
+    kind: ForwardedChannelKind,
+}
+
+impl fmt::Debug for ForwardedChannel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ForwardedChannel")
+            .field("channel", &self.channel)
+            .field("kind", &self.kind)
+            .finish()
+    }
+}
+
+impl ForwardedChannel {
+    fn new(channel: ClientChannel, kind: ForwardedChannelKind) -> Self {
+        Self { channel, kind }
+    }
+
+    /// Return the engine-local channel number for diagnostics and recorder correlation.
+    #[must_use]
+    pub fn id(&self) -> u32 {
+        self.channel.id()
+    }
+
+    /// Return the bounded metadata supplied by the remote forwarding open.
+    #[must_use]
+    pub const fn kind(&self) -> &ForwardedChannelKind {
+        &self.kind
+    }
+
+    /// Consume the wrapper and return the ordinary channel API.
+    #[must_use]
+    pub fn into_channel(self) -> ClientChannel {
+        self.channel
     }
 }
 
@@ -967,15 +1038,138 @@ struct ClientHandler {
     host: String,
     host_key_policy: HostKeyPolicy,
     verifier: Arc<dyn HostKeyVerifier + Send + Sync>,
+    channel_slots: Arc<Semaphore>,
+    forwarded_tx: mpsc::Sender<ForwardedChannel>,
 }
 
 impl ClientHandler {
-    fn new(config: &ClientConfig) -> Self {
+    fn new(
+        config: &ClientConfig,
+        channel_slots: Arc<Semaphore>,
+        forwarded_tx: mpsc::Sender<ForwardedChannel>,
+    ) -> Self {
         Self {
             host: config.host.clone(),
             host_key_policy: config.host_key_policy.clone(),
             verifier: Arc::clone(&config.verifier),
+            channel_slots,
+            forwarded_tx,
         }
+    }
+}
+
+impl ClientHandler {
+    async fn deliver_forwarded_channel(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        kind: ForwardedChannelKind,
+        reply: russh::client::ChannelOpenHandle,
+    ) {
+        let Ok(permit) = Arc::clone(&self.channel_slots).try_acquire_owned() else {
+            reply.reject(russh::ChannelOpenFailure::ResourceShortage).await;
+            return;
+        };
+        let forwarded = ForwardedChannel::new(ClientChannel::new(channel, permit), kind);
+        if self.forwarded_tx.try_send(forwarded).is_err() {
+            reply.reject(russh::ChannelOpenFailure::ResourceShortage).await;
+            return;
+        }
+        reply.accept().await;
+    }
+
+    async fn reject_invalid_forwarded_channel(reply: russh::client::ChannelOpenHandle) {
+        reply.reject(russh::ChannelOpenFailure::AdministrativelyProhibited).await;
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn queue_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        originator_address: &str,
+        originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
+    ) {
+        if validate_text(
+            connected_address.as_bytes(),
+            MAX_CLIENT_HOST,
+            "forwarded connected address",
+            true,
+        )
+        .is_err()
+            || validate_text(
+                originator_address.as_bytes(),
+                MAX_CLIENT_HOST,
+                "forwarded originator address",
+                true,
+            )
+            .is_err()
+        {
+            Self::reject_invalid_forwarded_channel(reply).await;
+            return;
+        }
+        self.deliver_forwarded_channel(
+            channel,
+            ForwardedChannelKind::Tcp {
+                connected_address: connected_address.to_owned(),
+                connected_port,
+                originator_address: originator_address.to_owned(),
+                originator_port,
+            },
+            reply,
+        )
+        .await;
+    }
+
+    async fn queue_forwarded_streamlocal(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        socket_path: &str,
+        reply: russh::client::ChannelOpenHandle,
+    ) {
+        if validate_text(socket_path.as_bytes(), MAX_CHANNEL_ADDRESS, "forwarded socket path", true)
+            .is_err()
+        {
+            Self::reject_invalid_forwarded_channel(reply).await;
+            return;
+        }
+        self.deliver_forwarded_channel(
+            channel,
+            ForwardedChannelKind::Streamlocal { socket_path: socket_path.to_owned() },
+            reply,
+        )
+        .await;
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn forwarded_tcpip_callback(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        originator_address: &str,
+        originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
+    ) {
+        self.queue_forwarded_tcpip(
+            channel,
+            connected_address,
+            connected_port,
+            originator_address,
+            originator_port,
+            reply,
+        )
+        .await;
+    }
+
+    async fn forwarded_streamlocal_callback(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        socket_path: &str,
+        reply: russh::client::ChannelOpenHandle,
+    ) {
+        self.queue_forwarded_streamlocal(channel, socket_path, reply).await;
     }
 }
 
@@ -1001,6 +1195,39 @@ impl Handler for ClientHandler {
         verify_host_key(&self.host, &encoded, &certificate_policy, self.verifier.as_ref())
             .map(|_| true)
             .map_err(ClientError::HostKey)
+    }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        originator_address: &str,
+        originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        self.forwarded_tcpip_callback(
+            channel,
+            connected_address,
+            connected_port,
+            originator_address,
+            originator_port,
+            reply,
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn server_channel_open_forwarded_streamlocal(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        socket_path: &str,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        self.forwarded_streamlocal_callback(channel, socket_path, reply).await;
+        Ok(())
     }
 }
 
@@ -1309,6 +1536,77 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct ForwardDeliveryServer {
+        opened: mpsc::Sender<&'static str>,
+    }
+
+    impl russh::server::Handler for ForwardDeliveryServer {
+        type Error = russh::Error;
+
+        async fn auth_password(
+            &mut self,
+            _user: &str,
+            _password: &str,
+        ) -> Result<russh::server::Auth, Self::Error> {
+            Ok(russh::server::Auth::Accept)
+        }
+
+        async fn channel_open_session(
+            &mut self,
+            _channel: russh::Channel<russh::server::Msg>,
+            reply: russh::server::ChannelOpenHandle,
+            _session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            reply.accept().await;
+            Ok(())
+        }
+
+        async fn tcpip_forward(
+            &mut self,
+            _address: &str,
+            _port: &mut u32,
+            session: &mut russh::server::Session,
+        ) -> Result<bool, Self::Error> {
+            let handle = session.handle();
+            let opened = self.opened.clone();
+            tokio::spawn(async move {
+                match handle.channel_open_forwarded_tcpip("127.0.0.1", 4242, "10.0.0.5", 5151).await
+                {
+                    Ok(channel) => {
+                        let _ = opened.send("tcp").await;
+                        let _ = channel.data(&b"forwarded tcp payload"[..]).await;
+                        let _ = channel.eof().await;
+                    }
+                    Err(_) => {
+                        let _ = opened.send("tcp-rejected").await;
+                    }
+                }
+            });
+            Ok(true)
+        }
+
+        async fn streamlocal_forward(
+            &mut self,
+            _socket_path: &str,
+            session: &mut russh::server::Session,
+        ) -> Result<bool, Self::Error> {
+            let handle = session.handle();
+            let opened = self.opened.clone();
+            tokio::spawn(async move {
+                let Ok(channel) =
+                    handle.channel_open_forwarded_streamlocal("/run/scoplen-forward.sock").await
+                else {
+                    return;
+                };
+                let _ = opened.send("streamlocal").await;
+                let _ = channel.data(&b"forwarded streamlocal payload"[..]).await;
+                let _ = channel.eof().await;
+            });
+            Ok(true)
+        }
+    }
+
     #[test]
     fn config_rejects_empty_host_and_zero_port() {
         let verifier = |_host: &str, _key: &HostKey| Ok(());
@@ -1367,7 +1665,8 @@ mod tests {
             Ok(())
         };
         let config = ClientConfig::new("host.example", 22, verifier).expect("config");
-        let mut handler = ClientHandler::new(&config);
+        let (forwarded_tx, _forwarded_rx) = mpsc::channel(1);
+        let mut handler = ClientHandler::new(&config, Arc::new(Semaphore::new(1)), forwarded_tx);
         assert!(
             handler
                 .check_server_key(&PublicKeyOrCertificate::PublicKey {
@@ -1662,6 +1961,154 @@ mod tests {
                 .expect("rejected streamlocal cancel event"),
             ForwardEvent::CancelStreamlocal { path: "/run/scoplen.sock".to_owned() }
         );
+        connection.disconnect().await.expect("disconnect client");
+    }
+
+    #[tokio::test]
+    async fn forwarded_tcpip_and_streamlocal_channels_are_delivered_with_metadata_and_data() {
+        let (opened, mut opened_events) = mpsc::channel(2);
+        let mut server_config = russh::server::Config::default();
+        server_config.keys.push(
+            PrivateKey::random(
+                &mut ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng),
+                Algorithm::Ed25519,
+            )
+            .expect("server key"),
+        );
+        let server_config = Arc::new(server_config);
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind server");
+        let address = listener.local_addr().expect("server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept client");
+            let _ =
+                russh::server::run_stream(server_config, stream, ForwardDeliveryServer { opened })
+                    .await;
+        });
+
+        let verifier = |_host: &str, _key: &HostKey| Ok(());
+        let config = ClientConfig::new("127.0.0.1", address.port(), verifier).expect("config");
+        let mut connection = ClientConnection::connect(config).await.expect("connect client");
+        connection.authenticate_password("user", b"password").await.expect("authenticate");
+
+        connection.request_tcpip_forward("127.0.0.1", 4242).await.expect("request TCP forwarding");
+        assert_eq!(
+            timeout(Duration::from_secs(5), opened_events.recv())
+                .await
+                .expect("TCP channel opened")
+                .expect("TCP open event"),
+            "tcp"
+        );
+        let forwarded = timeout(Duration::from_secs(5), connection.next_forwarded_channel())
+            .await
+            .expect("TCP forwarded channel")
+            .expect("TCP forwarded channel remains open");
+        assert!(matches!(
+            forwarded.kind(),
+            ForwardedChannelKind::Tcp {
+                connected_address,
+                connected_port: 4242,
+                originator_address,
+                originator_port: 5151,
+            } if connected_address == "127.0.0.1" && originator_address == "10.0.0.5"
+        ));
+        let mut channel = forwarded.into_channel();
+        assert!(matches!(
+            timeout(Duration::from_secs(5), channel.next_event())
+                .await
+                .expect("TCP data")
+                .expect("TCP data result"),
+            Some(ChannelEvent::Data(data)) if data == b"forwarded tcp payload"
+        ));
+        assert_eq!(
+            timeout(Duration::from_secs(5), channel.next_event())
+                .await
+                .expect("TCP EOF")
+                .expect("TCP EOF result"),
+            Some(ChannelEvent::Eof)
+        );
+        drop(channel);
+
+        connection
+            .request_streamlocal_forward("/run/scoplen-forward.sock")
+            .await
+            .expect("request streamlocal forwarding");
+        assert_eq!(
+            timeout(Duration::from_secs(5), opened_events.recv())
+                .await
+                .expect("streamlocal channel opened")
+                .expect("streamlocal open event"),
+            "streamlocal"
+        );
+        let forwarded = timeout(Duration::from_secs(5), connection.next_forwarded_channel())
+            .await
+            .expect("streamlocal forwarded channel")
+            .expect("streamlocal forwarded channel remains open");
+        assert_eq!(
+            forwarded.kind(),
+            &ForwardedChannelKind::Streamlocal {
+                socket_path: "/run/scoplen-forward.sock".to_owned()
+            }
+        );
+        let mut channel = forwarded.into_channel();
+        assert!(matches!(
+            timeout(Duration::from_secs(5), channel.next_event())
+                .await
+                .expect("streamlocal data")
+                .expect("streamlocal data result"),
+            Some(ChannelEvent::Data(data)) if data == b"forwarded streamlocal payload"
+        ));
+        assert_eq!(
+            timeout(Duration::from_secs(5), channel.next_event())
+                .await
+                .expect("streamlocal EOF")
+                .expect("streamlocal EOF result"),
+            Some(ChannelEvent::Eof)
+        );
+        connection.disconnect().await.expect("disconnect client");
+    }
+
+    #[tokio::test]
+    async fn forwarded_channel_respects_the_shared_channel_limit() {
+        let (opened, mut opened_events) = mpsc::channel(1);
+        let mut server_config = russh::server::Config::default();
+        server_config.keys.push(
+            PrivateKey::random(
+                &mut ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng),
+                Algorithm::Ed25519,
+            )
+            .expect("server key"),
+        );
+        let server_config = Arc::new(server_config);
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind server");
+        let address = listener.local_addr().expect("server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept client");
+            let _ =
+                russh::server::run_stream(server_config, stream, ForwardDeliveryServer { opened })
+                    .await;
+        });
+
+        let verifier = |_host: &str, _key: &HostKey| Ok(());
+        let config = ClientConfig::new("127.0.0.1", address.port(), verifier)
+            .expect("config")
+            .with_channel_limit(1)
+            .expect("channel limit");
+        let mut connection = ClientConnection::connect(config).await.expect("connect client");
+        connection.authenticate_password("user", b"password").await.expect("authenticate");
+        let session = connection.open_session().await.expect("reserve channel slot");
+        connection.request_tcpip_forward("127.0.0.1", 4242).await.expect("request TCP forwarding");
+        assert_eq!(
+            timeout(Duration::from_secs(5), opened_events.recv())
+                .await
+                .expect("rejection event")
+                .expect("rejection event remains open"),
+            "tcp-rejected"
+        );
+        assert!(
+            timeout(Duration::from_millis(100), connection.next_forwarded_channel()).await.is_err(),
+            "a channel rejected for a full quota must not reach the delivery queue"
+        );
+        drop(session);
         connection.disconnect().await.expect("disconnect client");
     }
 
