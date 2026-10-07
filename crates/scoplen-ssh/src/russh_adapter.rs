@@ -624,6 +624,13 @@ impl ClientChannel {
         self.channel.request_shell(want_reply).await.map_err(ClientError::from)
     }
 
+    /// Start a bounded subsystem on this session channel.
+    pub async fn request_subsystem(&self, name: &str, want_reply: bool) -> Result<(), ClientError> {
+        validate_text(name.as_bytes(), MAX_CHANNEL_TEXT, "subsystem", true)
+            .map_err(ClientError::Config)?;
+        self.channel.request_subsystem(want_reply, name).await.map_err(ClientError::from)
+    }
+
     /// Notify the remote PTY of a bounded terminal resize.
     ///
     /// The dimensions use the same RFC 4254 `window-change` shape as the engine-independent
@@ -659,8 +666,9 @@ impl ClientChannel {
 
     /// Consume the channel as a bidirectional asynchronous byte stream.
     ///
-    /// The stream carries only `direct-tcpip` channel data and lifecycle bytes. It is intended for
-    /// [`ClientConnection::connect_stream`] and [`ClientConnection::connect_via_direct_tcpip`].
+    /// The stream carries `direct-tcpip` or session-subsystem data and lifecycle bytes. It is
+    /// intended for [`ClientConnection::connect_stream`],
+    /// [`ClientConnection::connect_via_direct_tcpip`], and framed subsystems such as SFTP.
     #[must_use]
     pub fn into_stream(self) -> ClientChannelStream {
         ClientChannelStream { inner: self.channel.into_stream(), _permit: self.permit }

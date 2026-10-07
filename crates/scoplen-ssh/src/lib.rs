@@ -3,8 +3,8 @@
 //!
 //! This crate provides the algorithm policy, direct byte transport boundary, engine-independent
 //! authentication and channel boundaries, security-key wire support, and bounded proxy composition
-//! for K-7. The concrete SSH handshake engine, channel scheduling, and SFTP transfer engine remain
-//! separate so callers do not depend on a particular engine.
+//! for K-7. The concrete SSH handshake engine and channel scheduling remain behind the public
+//! boundary; SFTP v3 framing and subsystem composition are exposed without leaking engine types.
 
 #![forbid(unsafe_code)]
 
@@ -20,6 +20,7 @@ mod proxy;
 mod russh_adapter;
 mod security_key;
 mod sftp;
+mod sftp_channel;
 mod socks;
 mod socks_listener;
 mod tcp;
@@ -84,6 +85,7 @@ pub use sftp::{
     MAX_SFTP_OUTSTANDING, MAX_SFTP_PACKET, MAX_SFTP_STRING, SftpAttributes, SftpClient, SftpError,
     SftpExtension, SftpLimits, SftpNameEntry, SftpPacket, SftpStatvfs,
 };
+pub use sftp_channel::{SftpChannel, SftpChannelError};
 pub use socks::{
     MAX_SOCKS_BUFFER, MAX_SOCKS_DOMAIN, MAX_SOCKS_USER_ID, SocksAddress, SocksBindAddress,
     SocksConnectRequest, SocksError, SocksHandshake, SocksProgress, SocksReply, SocksVersion,

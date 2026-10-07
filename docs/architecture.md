@@ -85,6 +85,6 @@ and symlink), binary-safe handles and extension data, attributes, status, and di
 responses, request-id correlation for bounded pipelining, and the OpenSSH `limits@openssh.com`,
 `posix-rename@openssh.com`, `statvfs@openssh.com`, `fstatvfs@openssh.com`, `hardlink@openssh.com`,
 `fsync@openssh.com`, `lsetstat@openssh.com`, `expand-path@openssh.com`, and `copy-data`
-requests and responses. The `russh` channel adapter covers session and `direct-tcpip` channel
-operations; transfer resume/progress, SFTP channel composition, and the interoperability matrix
+requests and responses. `SftpChannel` composes the bounded v3 handshake and packet framing over
+an accepted SSH `session` channel, while transfer resume/progress and the interoperability matrix
 remain open.
