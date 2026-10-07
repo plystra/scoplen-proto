@@ -19,6 +19,12 @@
       "kind": "auth.token.response",
       "input": "{\"refresh_expires_in\":2592000,\"refresh_token\":\"refresh-token-test\",\"expires_in\":600,\"token_type\":\"DPoP\",\"access_token\":\"access-token-test\"}",
       "expected": "{\"access_token\":\"access-token-test\",\"token_type\":\"DPoP\",\"expires_in\":600,\"refresh_token\":\"refresh-token-test\",\"refresh_expires_in\":2592000}"
+    },
+    {
+      "id": "api-auth-token-response-variable-lifetimes-v1",
+      "kind": "auth.token.response",
+      "input": "{\"refresh_expires_in\":2592001,\"refresh_token\":\"refresh-token-test\",\"expires_in\":601,\"token_type\":\"DPoP\",\"access_token\":\"access-token-test\"}",
+      "expected": "{\"access_token\":\"access-token-test\",\"token_type\":\"DPoP\",\"expires_in\":601,\"refresh_token\":\"refresh-token-test\",\"refresh_expires_in\":2592001}"
     }
   ]
 }

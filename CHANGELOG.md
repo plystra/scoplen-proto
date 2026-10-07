@@ -81,6 +81,8 @@ All notable changes to `scoplen-proto` will be recorded here.
 - Added strict K-3 challenge, signed-device request, and token response JSON codecs with canonical
   nonce, UUIDv7, timestamp, signature, token-type, lifetime, and failure-path validation, plus
   published authentication vectors.
+- Corrected K-3 token response validation to accept any positive encoded lifetime while retaining
+  the 600-second and 30-day writer defaults, with a variable-lifetime vector and failure tests.
 - Added deterministic K-4 sync session request and response codecs, validation of limits and vault
   identifiers, forward-compatible vault kinds, and published session vectors.
 - Added the K-3 QR pairing payload, strict parser, and constant-time verification of relayed

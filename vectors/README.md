@@ -90,7 +90,8 @@ unknown error-code preservation and malformed-body rejection.
 `api-auth.json` contains the K-3 JSON vectors. Challenge responses use a 32-byte lowercase
 hexadecimal nonce and an RFC 3339 UTC timestamp. Device requests use a canonical UUIDv7, the
 canonical challenge nonce, and a fixed-width P-256 `r || s` signature as lowercase hexadecimal.
-Token responses use literal `DPoP` and the fixed 600-second and 30-day lifetimes. The expected
+Token responses use literal `DPoP`; `AuthTokenResponse::new` writes the default 600-second and
+30-day lifetimes, while readers and validators accept any positive integer lifetime. The expected
 values are canonical field order; readers ignore unknown response fields while device requests
 reject unknown fields.
 
