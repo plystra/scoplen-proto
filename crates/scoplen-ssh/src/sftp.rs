@@ -17,12 +17,19 @@ const FXP_OPEN: u8 = 3;
 const FXP_CLOSE: u8 = 4;
 const FXP_READ: u8 = 5;
 const FXP_WRITE: u8 = 6;
-const FXP_STAT: u8 = 17;
 const FXP_LSTAT: u8 = 7;
 const FXP_FSTAT: u8 = 8;
+const FXP_OPENDIR: u8 = 11;
+const FXP_READDIR: u8 = 12;
+const FXP_REMOVE: u8 = 13;
+const FXP_MKDIR: u8 = 14;
+const FXP_RMDIR: u8 = 15;
+const FXP_REALPATH: u8 = 16;
+const FXP_STAT: u8 = 17;
 const FXP_STATUS: u8 = 101;
 const FXP_HANDLE: u8 = 102;
 const FXP_DATA: u8 = 103;
+const FXP_NAME: u8 = 104;
 const FXP_ATTRS: u8 = 105;
 const FXP_EXTENDED: u8 = 200;
 const FXP_EXTENDED_REPLY: u8 = 201;
@@ -44,6 +51,8 @@ pub const MAX_SFTP_STRING: usize = 64 * 1024;
 pub const MAX_SFTP_HANDLE: usize = 256;
 /// Maximum number of v3 version extensions in one VERSION packet.
 pub const MAX_SFTP_EXTENSIONS: usize = 64;
+/// Maximum directory entries carried in one `SSH_FXP_NAME` response.
+pub const MAX_SFTP_NAME_ENTRIES: usize = 1024;
 /// Maximum number of outstanding requests tracked by one client.
 pub const MAX_SFTP_OUTSTANDING: usize = 1024;
 /// Maximum extension-specific payload accepted by one EXTENDED packet.
@@ -258,6 +267,36 @@ impl SftpAttributes {
     }
 }
 
+/// One directory or canonical-path entry returned in an SFTP `NAME` packet.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SftpNameEntry {
+    /// File name or canonical path.
+    pub filename: Vec<u8>,
+    /// Server display name, which may be empty when the server has no long form.
+    pub longname: Vec<u8>,
+    /// Attributes associated with the entry.
+    pub attrs: SftpAttributes,
+}
+
+impl SftpNameEntry {
+    /// Construct a bounded directory entry.
+    pub fn new(
+        filename: impl Into<Vec<u8>>,
+        longname: impl Into<Vec<u8>>,
+        attrs: SftpAttributes,
+    ) -> Result<Self, SftpError> {
+        let entry = Self { filename: filename.into(), longname: longname.into(), attrs };
+        entry.validate()?;
+        Ok(entry)
+    }
+
+    fn validate(&self) -> Result<(), SftpError> {
+        validate_string(&self.filename, "name filename", false)?;
+        validate_string(&self.longname, "name longname", true)?;
+        Ok(())
+    }
+}
+
 /// The bounded core of the SFTP v3 packet set.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SftpPacket {
@@ -279,12 +318,26 @@ pub enum SftpPacket {
     Lstat { id: u32, path: Vec<u8> },
     /// Read handle attributes.
     Fstat { id: u32, handle: Vec<u8> },
+    /// Open a directory for enumeration.
+    Opendir { id: u32, path: Vec<u8> },
+    /// Read the next bounded batch of directory entries.
+    Readdir { id: u32, handle: Vec<u8> },
+    /// Remove one file or symbolic link.
+    Remove { id: u32, path: Vec<u8> },
+    /// Create one directory with the supplied attributes.
+    Mkdir { id: u32, path: Vec<u8>, attrs: SftpAttributes },
+    /// Remove one directory.
+    Rmdir { id: u32, path: Vec<u8> },
+    /// Resolve a path to its canonical server representation.
+    Realpath { id: u32, path: Vec<u8> },
     /// Return a status code and bounded diagnostic text.
     Status { id: u32, code: u32, message: Vec<u8>, language: Vec<u8> },
     /// Return a newly opened handle.
     Handle { id: u32, handle: Vec<u8> },
     /// Return file data.
     Data { id: u32, data: Vec<u8> },
+    /// Return directory or canonical-path entries.
+    Name { id: u32, entries: Vec<SftpNameEntry> },
     /// Return attributes.
     Attrs { id: u32, attrs: SftpAttributes },
     /// Send an extension-specific request body.
@@ -360,6 +413,31 @@ impl SftpPacket {
                 encoder.u32(*id);
                 encoder.string(handle, MAX_SFTP_HANDLE, "handle")?;
             }
+            Self::Opendir { id, path } => {
+                encode_path_request(&mut encoder, FXP_OPENDIR, *id, path)?;
+            }
+            Self::Readdir { id, handle } => {
+                validate_opaque(handle, MAX_SFTP_HANDLE, "handle", false)?;
+                encoder.u8(FXP_READDIR);
+                encoder.u32(*id);
+                encoder.string(handle, MAX_SFTP_HANDLE, "handle")?;
+            }
+            Self::Remove { id, path } => {
+                encode_path_request(&mut encoder, FXP_REMOVE, *id, path)?;
+            }
+            Self::Mkdir { id, path, attrs } => {
+                validate_string(path, "path", false)?;
+                encoder.u8(FXP_MKDIR);
+                encoder.u32(*id);
+                encoder.string(path, MAX_SFTP_STRING, "path")?;
+                attrs.encode_into(&mut encoder)?;
+            }
+            Self::Rmdir { id, path } => {
+                encode_path_request(&mut encoder, FXP_RMDIR, *id, path)?;
+            }
+            Self::Realpath { id, path } => {
+                encode_path_request(&mut encoder, FXP_REALPATH, *id, path)?;
+            }
             Self::Status { id, code, message, language } => {
                 validate_string(message, "status message", true)?;
                 validate_string(language, "status language", true)?;
@@ -380,6 +458,23 @@ impl SftpPacket {
                 encoder.u8(FXP_DATA);
                 encoder.u32(*id);
                 encoder.string(data, MAX_SFTP_PACKET, "data")?;
+            }
+            Self::Name { id, entries } => {
+                if entries.len() > MAX_SFTP_NAME_ENTRIES {
+                    return Err(SftpError::FieldTooLarge("name entries"));
+                }
+                encoder.u8(FXP_NAME);
+                encoder.u32(*id);
+                encoder.u32(
+                    u32::try_from(entries.len())
+                        .map_err(|_| SftpError::FieldTooLarge("name entries"))?,
+                );
+                for entry in entries {
+                    entry.validate()?;
+                    encoder.string(&entry.filename, MAX_SFTP_STRING, "name filename")?;
+                    encoder.string(&entry.longname, MAX_SFTP_STRING, "name longname")?;
+                    entry.attrs.encode_into(&mut encoder)?;
+                }
             }
             Self::Attrs { id, attrs } => {
                 encoder.u8(FXP_ATTRS);
@@ -479,6 +574,26 @@ impl SftpPacket {
                 id: reader.u32("request id")?,
                 handle: reader.opaque(MAX_SFTP_HANDLE, "handle", false)?,
             },
+            FXP_OPENDIR | FXP_REMOVE | FXP_RMDIR | FXP_REALPATH => {
+                let id = reader.u32("request id")?;
+                let path = reader.bytes(MAX_SFTP_STRING, "path", false)?;
+                match packet_type {
+                    FXP_OPENDIR => Self::Opendir { id, path },
+                    FXP_REMOVE => Self::Remove { id, path },
+                    FXP_RMDIR => Self::Rmdir { id, path },
+                    FXP_REALPATH => Self::Realpath { id, path },
+                    _ => unreachable!("packet type matched above"),
+                }
+            }
+            FXP_READDIR => Self::Readdir {
+                id: reader.u32("request id")?,
+                handle: reader.opaque(MAX_SFTP_HANDLE, "handle", false)?,
+            },
+            FXP_MKDIR => Self::Mkdir {
+                id: reader.u32("request id")?,
+                path: reader.bytes(MAX_SFTP_STRING, "path", false)?,
+                attrs: SftpAttributes::decode_from(&mut reader)?,
+            },
             FXP_STATUS => Self::Status {
                 id: reader.u32("request id")?,
                 code: reader.u32("status code")?,
@@ -493,6 +608,19 @@ impl SftpPacket {
                 id: reader.u32("request id")?,
                 data: reader.opaque(MAX_SFTP_PACKET - 64, "data", true)?,
             },
+            FXP_NAME => {
+                let id = reader.u32("request id")?;
+                let count = reader.count(MAX_SFTP_NAME_ENTRIES, "name entries")?;
+                let mut entries = Vec::with_capacity(count);
+                for _ in 0..count {
+                    entries.push(SftpNameEntry::new(
+                        reader.bytes(MAX_SFTP_STRING, "name filename", false)?,
+                        reader.bytes(MAX_SFTP_STRING, "name longname", true)?,
+                        SftpAttributes::decode_from(&mut reader)?,
+                    )?);
+                }
+                Self::Name { id, entries }
+            }
             FXP_ATTRS => Self::Attrs {
                 id: reader.u32("request id")?,
                 attrs: SftpAttributes::decode_from(&mut reader)?,
@@ -524,9 +652,16 @@ impl SftpPacket {
             | Self::Stat { id, .. }
             | Self::Lstat { id, .. }
             | Self::Fstat { id, .. }
+            | Self::Opendir { id, .. }
+            | Self::Readdir { id, .. }
+            | Self::Remove { id, .. }
+            | Self::Mkdir { id, .. }
+            | Self::Rmdir { id, .. }
+            | Self::Realpath { id, .. }
             | Self::Status { id, .. }
             | Self::Handle { id, .. }
             | Self::Data { id, .. }
+            | Self::Name { id, .. }
             | Self::Attrs { id, .. }
             | Self::Extended { id, .. }
             | Self::ExtendedReply { id, .. } => Some(*id),
@@ -637,6 +772,40 @@ impl SftpClient {
     /// Queue a CLOSE request with a tracked request id.
     pub fn close(&mut self, handle: impl Into<Vec<u8>>) -> Result<SftpPacket, SftpError> {
         self.queue(|id| SftpPacket::Close { id, handle: handle.into() })
+    }
+
+    /// Queue an OPENDIR request with a tracked request id.
+    pub fn opendir(&mut self, path: impl Into<Vec<u8>>) -> Result<SftpPacket, SftpError> {
+        self.queue(|id| SftpPacket::Opendir { id, path: path.into() })
+    }
+
+    /// Queue a READDIR request with a tracked request id.
+    pub fn readdir(&mut self, handle: impl Into<Vec<u8>>) -> Result<SftpPacket, SftpError> {
+        self.queue(|id| SftpPacket::Readdir { id, handle: handle.into() })
+    }
+
+    /// Queue a REMOVE request with a tracked request id.
+    pub fn remove(&mut self, path: impl Into<Vec<u8>>) -> Result<SftpPacket, SftpError> {
+        self.queue(|id| SftpPacket::Remove { id, path: path.into() })
+    }
+
+    /// Queue a MKDIR request with a tracked request id.
+    pub fn mkdir(
+        &mut self,
+        path: impl Into<Vec<u8>>,
+        attrs: SftpAttributes,
+    ) -> Result<SftpPacket, SftpError> {
+        self.queue(|id| SftpPacket::Mkdir { id, path: path.into(), attrs })
+    }
+
+    /// Queue an RMDIR request with a tracked request id.
+    pub fn rmdir(&mut self, path: impl Into<Vec<u8>>) -> Result<SftpPacket, SftpError> {
+        self.queue(|id| SftpPacket::Rmdir { id, path: path.into() })
+    }
+
+    /// Queue a REALPATH request with a tracked request id.
+    pub fn realpath(&mut self, path: impl Into<Vec<u8>>) -> Result<SftpPacket, SftpError> {
+        self.queue(|id| SftpPacket::Realpath { id, path: path.into() })
     }
 
     /// Queue an OpenSSH limits extension request with a tracked request id.
@@ -889,10 +1058,20 @@ mod tests {
             SftpPacket::Stat { id: 5, path: b"/tmp/a".to_vec() },
             SftpPacket::Lstat { id: 6, path: b"/tmp/a".to_vec() },
             SftpPacket::Fstat { id: 7, handle: b"h".to_vec() },
-            SftpPacket::Status { id: 8, code: 0, message: b"ok".to_vec(), language: Vec::new() },
-            SftpPacket::Handle { id: 9, handle: b"h".to_vec() },
-            SftpPacket::Data { id: 10, data: b"data".to_vec() },
-            SftpPacket::Attrs { id: 11, attrs: attrs() },
+            SftpPacket::Opendir { id: 8, path: b"/tmp".to_vec() },
+            SftpPacket::Readdir { id: 9, handle: b"h".to_vec() },
+            SftpPacket::Remove { id: 10, path: b"/tmp/a".to_vec() },
+            SftpPacket::Mkdir { id: 11, path: b"/tmp/d".to_vec(), attrs: attrs() },
+            SftpPacket::Rmdir { id: 12, path: b"/tmp/d".to_vec() },
+            SftpPacket::Realpath { id: 13, path: b".".to_vec() },
+            SftpPacket::Status { id: 14, code: 0, message: b"ok".to_vec(), language: Vec::new() },
+            SftpPacket::Handle { id: 15, handle: b"h".to_vec() },
+            SftpPacket::Data { id: 16, data: b"data".to_vec() },
+            SftpPacket::Name {
+                id: 17,
+                entries: vec![SftpNameEntry::new(b"a", b"-rw-r--r--", attrs()).unwrap()],
+            },
+            SftpPacket::Attrs { id: 18, attrs: attrs() },
         ];
         for packet in packets {
             let wire = packet.encode().unwrap();
@@ -1013,6 +1192,25 @@ mod tests {
     }
 
     #[test]
+    fn directory_packets_enforce_paths_handles_and_entry_counts() {
+        assert_eq!(
+            SftpPacket::Opendir { id: 1, path: Vec::new() }.encode(),
+            Err(SftpError::InvalidValue("path"))
+        );
+        assert_eq!(
+            SftpPacket::Readdir { id: 2, handle: Vec::new() }.encode(),
+            Err(SftpError::InvalidValue("handle"))
+        );
+        let entries = (0..=MAX_SFTP_NAME_ENTRIES)
+            .map(|_| SftpNameEntry::new(b"x", Vec::new(), SftpAttributes::default()).unwrap())
+            .collect();
+        assert_eq!(
+            SftpPacket::Name { id: 3, entries }.encode(),
+            Err(SftpError::FieldTooLarge("name entries"))
+        );
+    }
+
+    #[test]
     fn limits_extension_round_trips_and_rejects_wrong_lengths() {
         let request = SftpPacket::limits_request(12);
         assert_eq!(
@@ -1055,5 +1253,22 @@ mod tests {
         assert_eq!(client.pending_requests(), 4);
         assert_eq!(client.read(Vec::new(), 0, 1), Err(SftpError::InvalidValue("handle")));
         assert_eq!(client.pending_requests(), 4);
+    }
+
+    #[test]
+    fn client_directory_builders_correlate_and_release_invalid_ids() {
+        let mut client = SftpClient::new(8).unwrap();
+        client.accept_version(&SftpPacket::Version { version: 3, extensions: Vec::new() }).unwrap();
+        assert_eq!(client.opendir(b"/tmp").unwrap().request_id(), Some(1));
+        assert_eq!(client.readdir(b"h").unwrap().request_id(), Some(2));
+        assert_eq!(client.remove(b"/tmp/a").unwrap().request_id(), Some(3));
+        assert_eq!(
+            client.mkdir(b"/tmp/d", SftpAttributes::default()).unwrap().request_id(),
+            Some(4)
+        );
+        assert_eq!(client.rmdir(b"/tmp/d").unwrap().request_id(), Some(5));
+        assert_eq!(client.realpath(b".").unwrap().request_id(), Some(6));
+        assert_eq!(client.opendir(Vec::new()), Err(SftpError::InvalidValue("path")));
+        assert_eq!(client.pending_requests(), 6);
     }
 }
