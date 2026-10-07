@@ -11,7 +11,7 @@
 use std::{collections::BTreeSet, fmt, net::IpAddr};
 
 use scoplen_crypto::{Ed25519SigningKey, P256SigningKey, PrimitiveError, SecretVec};
-use ssh_key::{Certificate, PublicKey};
+use ssh_key::{Certificate, HashAlg, PublicKey};
 use thiserror::Error;
 
 const USERAUTH_REQUEST: u8 = 50;
@@ -49,23 +49,40 @@ pub enum AuthMethodError {
 
 /// SSH signature algorithms supported by this authentication boundary.
 ///
-/// RSA signature selection and FIDO `sk-` algorithms remain a separate outcome because SSH uses
-/// the `ssh-rsa` key algorithm with an independent `rsa-sha2-*` signature algorithm.
+/// RSA deliberately has separate variants for the two SHA-2 choices. Its public-key blob always
+/// uses the `ssh-rsa` key algorithm, while the RFC 4252 request and signature wrapper use the
+/// selected `rsa-sha2-*` algorithm.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum SignatureAlgorithm {
     /// Ed25519 (`ssh-ed25519`).
     Ed25519,
     /// ECDSA over NIST P-256 (`ecdsa-sha2-nistp256`).
     EcdsaSha2Nistp256,
+    /// RSA with SHA-256 (`rsa-sha2-256`).
+    RsaSha2_256,
+    /// RSA with SHA-512 (`rsa-sha2-512`).
+    RsaSha2_512,
 }
 
 impl SignatureAlgorithm {
-    /// Return the SSH algorithm identifier used for a raw public key and signature.
+    /// Return the SSH algorithm identifier used in the request and signature wrapper.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Ed25519 => "ssh-ed25519",
             Self::EcdsaSha2Nistp256 => "ecdsa-sha2-nistp256",
+            Self::RsaSha2_256 => "rsa-sha2-256",
+            Self::RsaSha2_512 => "rsa-sha2-512",
+        }
+    }
+
+    /// Return the SSH key algorithm encoded inside the public-key blob.
+    #[must_use]
+    pub const fn key_algorithm_name(self) -> &'static str {
+        match self {
+            Self::Ed25519 => "ssh-ed25519",
+            Self::EcdsaSha2Nistp256 => "ecdsa-sha2-nistp256",
+            Self::RsaSha2_256 | Self::RsaSha2_512 => "ssh-rsa",
         }
     }
 
@@ -75,21 +92,48 @@ impl SignatureAlgorithm {
         match self {
             Self::Ed25519 => "ssh-ed25519-cert-v01@openssh.com",
             Self::EcdsaSha2Nistp256 => "ecdsa-sha2-nistp256-cert-v01@openssh.com",
+            Self::RsaSha2_256 => "rsa-sha2-256-cert-v01@openssh.com",
+            Self::RsaSha2_512 => "rsa-sha2-512-cert-v01@openssh.com",
         }
     }
 
-    fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "ssh-ed25519" | "ssh-ed25519-cert-v01@openssh.com" => Some(Self::Ed25519),
-            "ecdsa-sha2-nistp256" | "ecdsa-sha2-nistp256-cert-v01@openssh.com" => {
-                Some(Self::EcdsaSha2Nistp256)
-            }
-            _ => None,
-        }
+    fn supports_identity(name: &str) -> bool {
+        matches!(
+            name,
+            "ssh-ed25519"
+                | "ssh-ed25519-cert-v01@openssh.com"
+                | "ecdsa-sha2-nistp256"
+                | "ecdsa-sha2-nistp256-cert-v01@openssh.com"
+                | "rsa-sha2-256"
+                | "rsa-sha2-256-cert-v01@openssh.com"
+                | "rsa-sha2-512"
+                | "rsa-sha2-512-cert-v01@openssh.com"
+                | "ssh-rsa-cert-v01@openssh.com"
+        )
     }
 
     fn accepts_identity(self, identity: &str) -> bool {
-        identity == self.name() || identity == self.certificate_name()
+        match self {
+            Self::Ed25519 | Self::EcdsaSha2Nistp256 => {
+                identity == self.name() || identity == self.certificate_name()
+            }
+            Self::RsaSha2_256 => matches!(
+                identity,
+                "rsa-sha2-256"
+                    | "rsa-sha2-256-cert-v01@openssh.com"
+                    | "ssh-rsa-cert-v01@openssh.com"
+            ),
+            Self::RsaSha2_512 => matches!(
+                identity,
+                "rsa-sha2-512"
+                    | "rsa-sha2-512-cert-v01@openssh.com"
+                    | "ssh-rsa-cert-v01@openssh.com"
+            ),
+        }
+    }
+
+    fn is_rsa_sha2(self) -> bool {
+        matches!(self, Self::RsaSha2_256 | Self::RsaSha2_512)
     }
 }
 
@@ -153,16 +197,20 @@ impl PublicKeyIdentity {
         key_blob: impl Into<Vec<u8>>,
     ) -> Result<Self, SignerError> {
         let algorithm = algorithm.into();
-        if SignatureAlgorithm::from_name(&algorithm).is_none() {
+        if !SignatureAlgorithm::supports_identity(&algorithm) {
             return Err(SignerError::InvalidInput("unsupported SSH public-key algorithm"));
         }
+        let rsa_request_algorithm = matches!(algorithm.as_str(), "rsa-sha2-256" | "rsa-sha2-512");
         let key_blob = key_blob.into();
         if key_blob.is_empty() || key_blob.len() > MAX_KEY_BLOB {
             return Err(SignerError::EmptyPublicKey);
         }
         let (encoded_algorithm, _) = read_string(&key_blob)
             .ok_or(SignerError::InvalidInput("public-key blob is not an SSH string sequence"))?;
-        if encoded_algorithm != algorithm.as_bytes() {
+        if !rsa_request_algorithm && encoded_algorithm != algorithm.as_bytes() {
+            return Err(SignerError::InvalidInput("public-key blob algorithm mismatch"));
+        }
+        if rsa_request_algorithm && encoded_algorithm != b"ssh-rsa" {
             return Err(SignerError::InvalidInput("public-key blob algorithm mismatch"));
         }
         let parsed = PublicKey::from_bytes(&key_blob)
@@ -171,7 +219,9 @@ impl PublicKeyIdentity {
             || parsed.algorithm().as_str().to_owned(),
             |certificate| certificate.algorithm().to_certificate_type(),
         );
-        if parsed_algorithm != algorithm {
+        if (!rsa_request_algorithm && parsed_algorithm != algorithm)
+            || (rsa_request_algorithm && parsed_algorithm != "ssh-rsa")
+        {
             return Err(SignerError::InvalidInput("public-key algorithm does not match key data"));
         }
         let key_blob = parsed
@@ -667,7 +717,6 @@ impl PublicKeyAuthRequest {
         if signer_key != identity.signing_key_blob {
             return Err(SignerError::InvalidInput("signer key does not match public-key identity"));
         }
-        let identity_algorithm = identity.algorithm().to_owned();
         let unsigned = Self::probe(context, identity)?;
         let signature_payload = unsigned.signature_payload();
         let signature_blob = signer.sign(&signature_payload)?;
@@ -678,8 +727,8 @@ impl PublicKeyAuthRequest {
             return Err(SignerError::InvalidInput("SSH signature blob is too large"));
         }
         let mut signature =
-            Vec::with_capacity(4 + identity_algorithm.len() + 4 + signature_blob.len());
-        write_string(&mut signature, identity_algorithm.as_bytes())?;
+            Vec::with_capacity(4 + signer.algorithm().name().len() + 4 + signature_blob.len());
+        write_string(&mut signature, signer.algorithm().name().as_bytes())?;
         write_string(&mut signature, &signature_blob)?;
         Ok(Self { signature: Some(signature), ..unsigned })
     }
@@ -791,6 +840,63 @@ impl Signer for Ed25519SshSigner {
 
     fn sign(&self, message: &[u8]) -> Result<Vec<u8>, SignerError> {
         Ok(self.key.sign(message).to_vec())
+    }
+}
+
+/// A software or imported RSA private key for SSH authentication.
+///
+/// RSA keys use the `ssh-rsa` key blob format, but this signer only permits the SHA-2 signature
+/// algorithms required by K-7. The selected hash is bound to the signer instance so a caller
+/// cannot accidentally emit a `rsa-sha2-512` signature while offering a `rsa-sha2-256` identity.
+pub struct RsaSshSigner {
+    key: ssh_key::PrivateKey,
+    algorithm: SignatureAlgorithm,
+}
+
+impl RsaSshSigner {
+    /// Wrap an RSA private key and select its SHA-2 signature algorithm.
+    pub fn new(
+        key: ssh_key::PrivateKey,
+        algorithm: SignatureAlgorithm,
+    ) -> Result<Self, SignerError> {
+        if !algorithm.is_rsa_sha2() {
+            return Err(SignerError::InvalidInput("RSA signer requires rsa-sha2 algorithm"));
+        }
+        if key.key_data().rsa().is_none() {
+            return Err(SignerError::InvalidInput("RSA signer requires an RSA private key"));
+        }
+        Ok(Self { key, algorithm })
+    }
+}
+
+impl Signer for RsaSshSigner {
+    fn algorithm(&self) -> SignatureAlgorithm {
+        self.algorithm
+    }
+
+    fn public_key_blob(&self) -> Result<Vec<u8>, SignerError> {
+        self.key
+            .public_key()
+            .to_bytes()
+            .map_err(|_| SignerError::InvalidInput("RSA public-key encoding failed"))
+    }
+
+    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, SignerError> {
+        let key = self
+            .key
+            .key_data()
+            .rsa()
+            .ok_or(SignerError::InvalidInput("RSA signer requires an RSA private key"))?;
+        let hash = match self.algorithm {
+            SignatureAlgorithm::RsaSha2_256 => HashAlg::Sha256,
+            SignatureAlgorithm::RsaSha2_512 => HashAlg::Sha512,
+            SignatureAlgorithm::Ed25519 | SignatureAlgorithm::EcdsaSha2Nistp256 => {
+                return Err(SignerError::InvalidInput("RSA signer requires rsa-sha2 algorithm"));
+            }
+        };
+        let signature = signature::Signer::try_sign(&(key, Some(hash)), message)
+            .map_err(|_| SignerError::Signing("RSA signing failed".to_owned()))?;
+        Ok(signature.as_bytes().to_vec())
     }
 }
 
@@ -1329,7 +1435,10 @@ fn encode_mpint(value: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
     use scoplen_crypto::{ed25519_verify, p256_verify};
-    use ssh_key::{Algorithm, PrivateKey, certificate, getrandom::SysRng, rand_core::UnwrapErr};
+    use ssh_key::{
+        Algorithm, HashAlg, PrivateKey, PublicKey, certificate, getrandom::SysRng,
+        rand_core::UnwrapErr,
+    };
 
     fn ssh_string(value: &[u8]) -> Vec<u8> {
         let mut output = Vec::new();
@@ -1596,6 +1705,114 @@ mod tests {
         let signature = signer.sign(b"message").expect("signature");
         let (_, rest) = read_string(&signature).expect("r");
         assert!(read_string(rest).is_some());
+    }
+
+    #[test]
+    fn rsa_sha2_signers_emit_matching_algorithms_and_verifiable_signatures() {
+        let mut rng = UnwrapErr(SysRng);
+        let key = PrivateKey::random(&mut rng, Algorithm::Rsa { hash: None }).expect("RSA key");
+        let context =
+            PublicKeyAuthContext::new([3; 32], "alice", "ssh-connection").expect("context");
+
+        for (algorithm, hash) in [
+            (SignatureAlgorithm::RsaSha2_256, HashAlg::Sha256),
+            (SignatureAlgorithm::RsaSha2_512, HashAlg::Sha512),
+        ] {
+            let signer = RsaSshSigner::new(key.clone(), algorithm).expect("RSA signer");
+            let identity = PublicKeyIdentity::from_signer(&signer).expect("identity");
+            assert_eq!(identity.algorithm(), algorithm.name());
+            let key_blob = signer.public_key_blob().expect("public key");
+            let (key_algorithm, _) = read_string(&key_blob).expect("key algorithm");
+            assert_eq!(key_algorithm, b"ssh-rsa");
+
+            let request =
+                PublicKeyAuthRequest::signed(context.clone(), identity, &signer).expect("signed");
+            let (signature_algorithm, signature_blob) =
+                signature_parts(request.signature().expect("signature"));
+            assert_eq!(signature_algorithm, algorithm.name().as_bytes());
+            let signature = ssh_key::Signature::new(
+                Algorithm::Rsa { hash: Some(hash) },
+                signature_blob.to_vec(),
+            )
+            .expect("RSA signature");
+            let public_key = PublicKey::from_bytes(&key_blob).expect("public key");
+            signature::Verifier::verify(&public_key, &request.signature_payload(), &signature)
+                .expect("RSA signature verifies");
+        }
+    }
+
+    #[test]
+    fn rsa_sha2_signers_reject_hash_substitution_and_non_rsa_keys() {
+        let mut rng = UnwrapErr(SysRng);
+        let key = PrivateKey::random(&mut rng, Algorithm::Rsa { hash: None }).expect("RSA key");
+        let sha256 = RsaSshSigner::new(key.clone(), SignatureAlgorithm::RsaSha2_256)
+            .expect("SHA-256 signer");
+        let sha512 =
+            RsaSshSigner::new(key, SignatureAlgorithm::RsaSha2_512).expect("SHA-512 signer");
+        let identity = PublicKeyIdentity::from_signer(&sha256).expect("identity");
+        let context =
+            PublicKeyAuthContext::new([3; 32], "alice", "ssh-connection").expect("context");
+        assert_eq!(
+            PublicKeyAuthRequest::signed(context, identity, &sha512),
+            Err(SignerError::AlgorithmMismatch {
+                signer: "rsa-sha2-512".into(),
+                identity: "rsa-sha2-256".into(),
+            })
+        );
+
+        let ed_key = PrivateKey::random(&mut rng, Algorithm::Ed25519).expect("Ed25519 key");
+        assert!(matches!(
+            RsaSshSigner::new(ed_key, SignatureAlgorithm::RsaSha2_256),
+            Err(SignerError::InvalidInput("RSA signer requires an RSA private key"))
+        ));
+        assert!(matches!(
+            RsaSshSigner::new(
+                PrivateKey::random(&mut rng, Algorithm::Rsa { hash: None }).expect("RSA key"),
+                SignatureAlgorithm::Ed25519,
+            ),
+            Err(SignerError::InvalidInput("RSA signer requires rsa-sha2 algorithm"))
+        ));
+    }
+
+    #[test]
+    fn rsa_sha2_signer_authenticates_a_legacy_rsa_certificate_with_sha2() {
+        let mut rng = UnwrapErr(SysRng);
+        let ca = PrivateKey::random(&mut rng, Algorithm::Ed25519).expect("CA key");
+        let subject =
+            PrivateKey::random(&mut rng, Algorithm::Rsa { hash: None }).expect("RSA subject key");
+        let mut builder =
+            certificate::Builder::new(vec![8; 16], subject.public_key().clone(), 100, 200)
+                .expect("builder");
+        builder.cert_type(certificate::CertType::User).expect("type");
+        builder.valid_principal("alice").expect("principal");
+        let encoded = builder.sign(&ca).expect("certificate").to_bytes().expect("encoding");
+        let certificate = SshCertificate::from_bytes(&encoded).expect("certificate");
+        let identity = certificate
+            .user_identity(&CertificateValidationPolicy::user("alice", 150))
+            .expect("identity");
+        assert_eq!(identity.algorithm(), "ssh-rsa-cert-v01@openssh.com");
+
+        let signer =
+            RsaSshSigner::new(subject, SignatureAlgorithm::RsaSha2_256).expect("RSA signer");
+        let context =
+            PublicKeyAuthContext::new([3; 32], "alice", "ssh-connection").expect("context");
+        let request = PublicKeyAuthRequest::signed(context, identity, &signer).expect("signed");
+        let (signature_algorithm, _) = signature_parts(request.signature().expect("signature"));
+        assert_eq!(signature_algorithm, b"rsa-sha2-256");
+    }
+
+    #[test]
+    fn rsa_identity_requires_sha2_request_algorithm_and_rsa_key_blob() {
+        let signer = Ed25519SshSigner::new(Ed25519SigningKey::from_bytes(&[9; 32]).expect("key"));
+        let key_blob = signer.public_key_blob().expect("key blob");
+        assert_eq!(
+            PublicKeyIdentity::new("ssh-rsa", key_blob.clone()),
+            Err(SignerError::InvalidInput("unsupported SSH public-key algorithm"))
+        );
+        assert_eq!(
+            PublicKeyIdentity::new("rsa-sha2-256", key_blob),
+            Err(SignerError::InvalidInput("public-key blob algorithm mismatch"))
+        );
     }
 
     #[test]
