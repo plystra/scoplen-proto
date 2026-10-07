@@ -7,7 +7,15 @@
 
 #![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 
-use std::{borrow::Cow, fmt, str, sync::Arc, time::Duration};
+use std::{
+    borrow::Cow,
+    fmt, io,
+    pin::Pin,
+    str,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
+};
 
 use russh::{
     ChannelMsg, Pty, Signer as RusshSigner,
@@ -362,6 +370,31 @@ impl ClientConnection {
         Ok(Self { handle })
     }
 
+    /// Connect to a target through an already connected and authenticated jump host.
+    ///
+    /// The jump host opens an RFC 4254 `direct-tcpip` channel to the target. The channel is
+    /// adapted to the same asynchronous stream boundary as [`Self::connect_stream`], so the
+    /// target performs its own key exchange, host-key verification, and authentication. Retain
+    /// the `jump` connection for as long as the returned target connection is in use. Calling
+    /// this method again with the returned connection composes another hop, allowing arbitrary
+    /// chain depth without exposing `russh` types.
+    pub async fn connect_via_direct_tcpip(
+        config: ClientConfig,
+        jump: &ClientConnection,
+        originator_address: &str,
+        originator_port: u32,
+    ) -> Result<Self, ClientError> {
+        let channel = jump
+            .open_direct_tcpip(
+                &config.host,
+                u32::from(config.port),
+                originator_address,
+                originator_port,
+            )
+            .await?;
+        Self::connect_stream(config, channel.into_stream()).await
+    }
+
     /// Authenticate with a session-bound RFC 4252 public-key request.
     ///
     /// The private key stays behind [`Signer`]. `russh` supplies the exact bytes it is about to
@@ -566,6 +599,15 @@ impl ClientChannel {
         self.channel.close().await.map_err(ClientError::from)
     }
 
+    /// Consume the channel as a bidirectional asynchronous byte stream.
+    ///
+    /// The stream carries only `direct-tcpip` channel data and lifecycle bytes. It is intended for
+    /// [`ClientConnection::connect_stream`] and [`ClientConnection::connect_via_direct_tcpip`].
+    #[must_use]
+    pub fn into_stream(self) -> ClientChannelStream {
+        ClientChannelStream { inner: self.channel.into_stream() }
+    }
+
     /// Wait for the next peer event. `Ok(None)` means the engine closed the event stream.
     pub async fn next_event(&mut self) -> Result<Option<ChannelEvent>, ClientError> {
         loop {
@@ -614,6 +656,45 @@ impl ClientChannel {
             };
             return Ok(Some(event));
         }
+    }
+}
+
+/// Opaque asynchronous stream backed by one SSH channel.
+pub struct ClientChannelStream {
+    inner: russh::ChannelStream<client::Msg>,
+}
+
+impl fmt::Debug for ClientChannelStream {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_struct("ClientChannelStream").finish_non_exhaustive()
+    }
+}
+
+impl AsyncRead for ClientChannelStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_read(context, buffer)
+    }
+}
+
+impl AsyncWrite for ClientChannelStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(context, buffer)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(context)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(context)
     }
 }
 
@@ -953,6 +1034,13 @@ mod tests {
             result,
             Err(ClientError::Protocol | ClientError::ConnectionClosed | ClientError::Transport(_))
         ));
+    }
+
+    #[test]
+    fn channel_stream_is_sendable_async_byte_transport() {
+        fn assert_stream<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>() {}
+
+        assert_stream::<ClientChannelStream>();
     }
 
     async fn assert_publickey_adapter_round_trip<S>(signer: &S)

@@ -71,8 +71,8 @@ pub use proxy::{
     ProxyProtocol, ProxyTransportError, Socks5Transport,
 };
 pub use russh_adapter::{
-    ChannelEvent, ClientChannel, ClientConfig, ClientConnection, ClientError, HostKeyPolicy,
-    PublicKeyAuthError,
+    ChannelEvent, ClientChannel, ClientChannelStream, ClientConfig, ClientConnection, ClientError,
+    HostKeyPolicy, PublicKeyAuthError,
 };
 pub use security_key::{
     SecurityKeyAlgorithm, SecurityKeyAuthRequest, SecurityKeyError, SecurityKeyProvider,
