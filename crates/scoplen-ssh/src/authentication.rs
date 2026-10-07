@@ -2,27 +2,50 @@
 //! Engine-independent SSH authentication and certificate validation.
 //!
 //! The types in this module deliberately stop at the RFC 4252 message boundary. An SSH engine
-//! supplies the session identifier and sends [`PublicKeyAuthRequest::encode`]; it does not need
-//! access to private key material. Concrete engine integration, keyboard-interactive prompts,
-//! passwords, and agent transports are separate outcomes in K-7.
+//! supplies the session identifier and sends the encoded method payloads; it does not need access
+//! to private key material. Concrete engine integration and agent transports remain separate
+//! outcomes in K-7.
 
 #![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 
-use std::{collections::BTreeSet, net::IpAddr};
+use std::{collections::BTreeSet, fmt, net::IpAddr};
 
-use scoplen_crypto::{Ed25519SigningKey, P256SigningKey, PrimitiveError};
+use scoplen_crypto::{Ed25519SigningKey, P256SigningKey, PrimitiveError, SecretVec};
 use ssh_key::{Certificate, PublicKey};
 use thiserror::Error;
 
 const USERAUTH_REQUEST: u8 = 50;
 const USERAUTH_METHOD: &[u8] = b"publickey";
+const USERAUTH_NONE_METHOD: &[u8] = b"none";
+const USERAUTH_PASSWORD_METHOD: &[u8] = b"password";
+const USERAUTH_KEYBOARD_INTERACTIVE_METHOD: &[u8] = b"keyboard-interactive";
+const USERAUTH_INFO_REQUEST: u8 = 60;
+const USERAUTH_INFO_RESPONSE: u8 = 61;
 const MAX_SESSION_ID: usize = 1024;
 const MAX_FIELD: usize = 4096;
+const MAX_AUTH_PASSWORD: usize = 64 * 1024;
+const MAX_AUTH_PROMPTS: usize = 64;
+const MAX_AUTH_PROMPT: usize = 4096;
+const MAX_AUTH_MESSAGE: usize = 256 * 1024;
 const MAX_KEY_BLOB: usize = 64 * 1024;
 const MAX_CERTIFICATE: usize = 64 * 1024;
 const MAX_SIGNATURE: usize = 64 * 1024;
 const FORCE_COMMAND: &str = "force-command";
 const SOURCE_ADDRESS: &str = "source-address";
+
+/// Errors returned by the engine-independent non-public-key authentication codecs.
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum AuthMethodError {
+    /// A required context or text field is empty or contains a NUL byte.
+    #[error("invalid SSH authentication field: {0}")]
+    InvalidField(&'static str),
+    /// A bounded field exceeded its input limit.
+    #[error("SSH authentication field is too large: {0}")]
+    FieldTooLarge(&'static str),
+    /// The message had a truncated, trailing, or otherwise invalid wire shape.
+    #[error("malformed SSH authentication message: {0}")]
+    MalformedMessage(&'static str),
+}
 
 /// SSH signature algorithms supported by this authentication boundary.
 ///
@@ -243,6 +266,367 @@ impl PublicKeyAuthContext {
     #[must_use]
     pub fn service(&self) -> &str {
         &self.service
+    }
+}
+
+/// Username and service fields shared by RFC 4252 methods without a session signature.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UserAuthContext {
+    username: String,
+    service: String,
+}
+
+impl UserAuthContext {
+    /// Create a bounded username and service context.
+    pub fn new(
+        username: impl Into<String>,
+        service: impl Into<String>,
+    ) -> Result<Self, AuthMethodError> {
+        let username = username.into();
+        let service = service.into();
+        validate_auth_text(&username, "username")?;
+        validate_auth_text(&service, "service")?;
+        Ok(Self { username, service })
+    }
+
+    /// Return the SSH username.
+    #[must_use]
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+
+    /// Return the SSH service name.
+    #[must_use]
+    pub fn service(&self) -> &str {
+        &self.service
+    }
+}
+
+/// An RFC 4252 `none` authentication probe.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NoneAuthRequest {
+    context: UserAuthContext,
+}
+
+impl NoneAuthRequest {
+    /// Create a `none` probe for one username and service.
+    #[must_use]
+    pub fn new(context: UserAuthContext) -> Self {
+        Self { context }
+    }
+
+    /// Return the request context.
+    #[must_use]
+    pub fn context(&self) -> &UserAuthContext {
+        &self.context
+    }
+
+    /// Encode the `SSH_MSG_USERAUTH_REQUEST` payload.
+    pub fn encode(&self) -> Result<Vec<u8>, AuthMethodError> {
+        encode_userauth_prefix(&self.context, USERAUTH_NONE_METHOD)
+    }
+}
+
+/// An RFC 4252 `password` authentication request.
+#[derive(Clone, Eq, PartialEq)]
+pub struct PasswordAuthRequest {
+    context: UserAuthContext,
+    password: SecretVec,
+    change: Option<(SecretVec, SecretVec)>,
+}
+
+impl fmt::Debug for PasswordAuthRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PasswordAuthRequest")
+            .field("context", &self.context)
+            .field("password_len", &self.password.len())
+            .field("change", &self.change.as_ref().map(|(old, new)| (old.len(), new.len())))
+            .finish()
+    }
+}
+
+impl PasswordAuthRequest {
+    /// Create a password authentication request.
+    pub fn new(
+        context: UserAuthContext,
+        password: impl Into<Vec<u8>>,
+    ) -> Result<Self, AuthMethodError> {
+        let password = password.into();
+        validate_auth_size(&password, MAX_AUTH_PASSWORD, "password")?;
+        Ok(Self { context, password: SecretVec::new(password), change: None })
+    }
+
+    /// Create a password-change request containing the old and new passwords.
+    pub fn change(
+        context: UserAuthContext,
+        old_password: impl Into<Vec<u8>>,
+        new_password: impl Into<Vec<u8>>,
+    ) -> Result<Self, AuthMethodError> {
+        let old_password = old_password.into();
+        let new_password = new_password.into();
+        validate_auth_size(&old_password, MAX_AUTH_PASSWORD, "old password")?;
+        validate_auth_size(&new_password, MAX_AUTH_PASSWORD, "new password")?;
+        Ok(Self {
+            context,
+            password: SecretVec::new(Vec::new()),
+            change: Some((SecretVec::new(old_password), SecretVec::new(new_password))),
+        })
+    }
+
+    /// Return the request context.
+    #[must_use]
+    pub fn context(&self) -> &UserAuthContext {
+        &self.context
+    }
+
+    /// Return whether this request asks the server to change a password.
+    #[must_use]
+    pub fn is_change(&self) -> bool {
+        self.change.is_some()
+    }
+
+    /// Encode the `SSH_MSG_USERAUTH_REQUEST` payload.
+    pub fn encode(&self) -> Result<Vec<u8>, AuthMethodError> {
+        let mut encoded = encode_userauth_prefix(&self.context, USERAUTH_PASSWORD_METHOD)?;
+        encoded.push(u8::from(self.change.is_some()));
+        if let Some((old_password, new_password)) = &self.change {
+            append_auth_string(
+                &mut encoded,
+                old_password.as_bytes(),
+                MAX_AUTH_PASSWORD,
+                "old password",
+            )?;
+            append_auth_string(
+                &mut encoded,
+                new_password.as_bytes(),
+                MAX_AUTH_PASSWORD,
+                "new password",
+            )?;
+        } else {
+            append_auth_string(
+                &mut encoded,
+                self.password.as_bytes(),
+                MAX_AUTH_PASSWORD,
+                "password",
+            )?;
+        }
+        ensure_auth_message_size(&encoded)
+    }
+}
+
+/// An RFC 4252 `keyboard-interactive` authentication request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KeyboardInteractiveRequest {
+    context: UserAuthContext,
+    language_tag: Vec<u8>,
+    submethods: Vec<u8>,
+}
+
+impl KeyboardInteractiveRequest {
+    /// Create a keyboard-interactive request with the RFC 4252 language and submethod fields.
+    pub fn new(
+        context: UserAuthContext,
+        language_tag: impl Into<Vec<u8>>,
+        submethods: impl Into<Vec<u8>>,
+    ) -> Result<Self, AuthMethodError> {
+        let language_tag = language_tag.into();
+        let submethods = submethods.into();
+        validate_auth_bytes(&language_tag, MAX_FIELD, "language tag")?;
+        validate_auth_bytes(&submethods, MAX_FIELD, "submethods")?;
+        Ok(Self { context, language_tag, submethods })
+    }
+
+    /// Return the request context.
+    #[must_use]
+    pub fn context(&self) -> &UserAuthContext {
+        &self.context
+    }
+
+    /// Encode the `SSH_MSG_USERAUTH_REQUEST` payload.
+    pub fn encode(&self) -> Result<Vec<u8>, AuthMethodError> {
+        let mut encoded =
+            encode_userauth_prefix(&self.context, USERAUTH_KEYBOARD_INTERACTIVE_METHOD)?;
+        append_auth_string(&mut encoded, &self.language_tag, MAX_FIELD, "language tag")?;
+        append_auth_string(&mut encoded, &self.submethods, MAX_FIELD, "submethods")?;
+        ensure_auth_message_size(&encoded)
+    }
+}
+
+/// One prompt contained in a keyboard-interactive information request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KeyboardInteractivePrompt {
+    text: Vec<u8>,
+    echo: bool,
+}
+
+impl KeyboardInteractivePrompt {
+    /// Create a bounded prompt and its echo policy.
+    pub fn new(text: impl Into<Vec<u8>>, echo: bool) -> Result<Self, AuthMethodError> {
+        let text = text.into();
+        validate_auth_bytes(&text, MAX_AUTH_PROMPT, "prompt")?;
+        Ok(Self { text, echo })
+    }
+
+    /// Return the prompt text.
+    #[must_use]
+    pub fn text(&self) -> &[u8] {
+        &self.text
+    }
+
+    /// Return whether the client may echo typed input.
+    #[must_use]
+    pub fn echo(&self) -> bool {
+        self.echo
+    }
+}
+
+/// A server keyboard-interactive information request containing one or more prompts.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KeyboardInteractiveInfoRequest {
+    name: Vec<u8>,
+    instruction: Vec<u8>,
+    language_tag: Vec<u8>,
+    prompts: Vec<KeyboardInteractivePrompt>,
+}
+
+impl KeyboardInteractiveInfoRequest {
+    /// Create a bounded information request.
+    pub fn new(
+        name: impl Into<Vec<u8>>,
+        instruction: impl Into<Vec<u8>>,
+        language_tag: impl Into<Vec<u8>>,
+        prompts: Vec<KeyboardInteractivePrompt>,
+    ) -> Result<Self, AuthMethodError> {
+        let name = name.into();
+        let instruction = instruction.into();
+        let language_tag = language_tag.into();
+        validate_auth_bytes(&name, MAX_FIELD, "name")?;
+        validate_auth_bytes(&instruction, MAX_FIELD, "instruction")?;
+        validate_auth_bytes(&language_tag, MAX_FIELD, "language tag")?;
+        validate_prompt_count(prompts.len())?;
+        Ok(Self { name, instruction, language_tag, prompts })
+    }
+
+    /// Parse one `SSH_MSG_USERAUTH_INFO_REQUEST` payload.
+    pub fn decode(encoded: &[u8]) -> Result<Self, AuthMethodError> {
+        if encoded.first().copied() != Some(USERAUTH_INFO_REQUEST) {
+            return Err(AuthMethodError::MalformedMessage("expected info request"));
+        }
+        let mut rest = &encoded[1..];
+        let (name, remaining) = read_auth_string(rest, MAX_FIELD, "name")?;
+        rest = remaining;
+        let (instruction, remaining) = read_auth_string(rest, MAX_FIELD, "instruction")?;
+        rest = remaining;
+        let (language_tag, remaining) = read_auth_string(rest, MAX_FIELD, "language tag")?;
+        rest = remaining;
+        let count = read_auth_u32(rest, "prompt count")? as usize;
+        rest = &rest[4..];
+        validate_prompt_count(count)?;
+        let mut prompts = Vec::with_capacity(count);
+        for _ in 0..count {
+            let (text, remaining) = read_auth_string(rest, MAX_AUTH_PROMPT, "prompt")?;
+            rest = remaining;
+            let echo = *rest
+                .first()
+                .ok_or(AuthMethodError::MalformedMessage("missing prompt echo flag"))?;
+            rest = &rest[1..];
+            if echo > 1 {
+                return Err(AuthMethodError::MalformedMessage("invalid prompt echo flag"));
+            }
+            prompts.push(KeyboardInteractivePrompt::new(text, echo == 1)?);
+        }
+        if !rest.is_empty() {
+            return Err(AuthMethodError::MalformedMessage("info request trailing data"));
+        }
+        Self::new(name, instruction, language_tag, prompts)
+    }
+
+    /// Encode one `SSH_MSG_USERAUTH_INFO_REQUEST` payload.
+    pub fn encode(&self) -> Result<Vec<u8>, AuthMethodError> {
+        let mut encoded = vec![USERAUTH_INFO_REQUEST];
+        append_auth_string(&mut encoded, &self.name, MAX_FIELD, "name")?;
+        append_auth_string(&mut encoded, &self.instruction, MAX_FIELD, "instruction")?;
+        append_auth_string(&mut encoded, &self.language_tag, MAX_FIELD, "language tag")?;
+        append_auth_count(&mut encoded, self.prompts.len(), "prompt count")?;
+        for prompt in &self.prompts {
+            append_auth_string(&mut encoded, &prompt.text, MAX_AUTH_PROMPT, "prompt")?;
+            encoded.push(u8::from(prompt.echo));
+        }
+        ensure_auth_message_size(&encoded)
+    }
+
+    /// Return the prompts in their server-provided order.
+    #[must_use]
+    pub fn prompts(&self) -> &[KeyboardInteractivePrompt] {
+        &self.prompts
+    }
+}
+
+/// Client responses to one keyboard-interactive information request.
+#[derive(Clone, Eq, PartialEq)]
+pub struct KeyboardInteractiveResponse {
+    responses: Vec<SecretVec>,
+}
+
+impl fmt::Debug for KeyboardInteractiveResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("KeyboardInteractiveResponse")
+            .field("response_count", &self.responses.len())
+            .field(
+                "response_lengths",
+                &self.responses.iter().map(SecretVec::len).collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
+impl KeyboardInteractiveResponse {
+    /// Create bounded responses matching the prompts in one information request.
+    pub fn new(responses: Vec<Vec<u8>>) -> Result<Self, AuthMethodError> {
+        validate_prompt_count(responses.len())?;
+        for response in &responses {
+            validate_auth_size(response, MAX_AUTH_PASSWORD, "response")?;
+        }
+        Ok(Self { responses: responses.into_iter().map(SecretVec::new).collect() })
+    }
+
+    /// Parse one `SSH_MSG_USERAUTH_INFO_RESPONSE` payload.
+    pub fn decode(encoded: &[u8]) -> Result<Self, AuthMethodError> {
+        if encoded.first().copied() != Some(USERAUTH_INFO_RESPONSE) {
+            return Err(AuthMethodError::MalformedMessage("expected info response"));
+        }
+        let mut rest = &encoded[1..];
+        let count = read_auth_u32(rest, "response count")? as usize;
+        rest = &rest[4..];
+        validate_prompt_count(count)?;
+        let mut responses = Vec::with_capacity(count);
+        for _ in 0..count {
+            let (response, remaining) = read_auth_string(rest, MAX_AUTH_PASSWORD, "response")?;
+            responses.push(SecretVec::new(response.to_vec()));
+            rest = remaining;
+        }
+        if !rest.is_empty() {
+            return Err(AuthMethodError::MalformedMessage("info response trailing data"));
+        }
+        Ok(Self { responses })
+    }
+
+    /// Encode one `SSH_MSG_USERAUTH_INFO_RESPONSE` payload.
+    pub fn encode(&self) -> Result<Vec<u8>, AuthMethodError> {
+        let mut encoded = vec![USERAUTH_INFO_RESPONSE];
+        append_auth_count(&mut encoded, self.responses.len(), "response count")?;
+        for response in &self.responses {
+            append_auth_string(&mut encoded, response.as_bytes(), MAX_AUTH_PASSWORD, "response")?;
+        }
+        ensure_auth_message_size(&encoded)
+    }
+
+    /// Return response bytes in prompt order.
+    #[must_use]
+    pub fn responses(&self) -> &[SecretVec] {
+        &self.responses
     }
 }
 
@@ -802,6 +1186,104 @@ fn validate_text_field(value: &str, field: &'static str) -> Result<(), SignerErr
     Ok(())
 }
 
+fn validate_auth_text(value: &str, field: &'static str) -> Result<(), AuthMethodError> {
+    if value.is_empty() || value.len() > MAX_FIELD || value.contains('\0') {
+        return Err(AuthMethodError::InvalidField(field));
+    }
+    Ok(())
+}
+
+fn validate_auth_bytes(
+    value: &[u8],
+    limit: usize,
+    field: &'static str,
+) -> Result<(), AuthMethodError> {
+    validate_auth_size(value, limit, field)?;
+    if value.contains(&0) {
+        return Err(AuthMethodError::InvalidField(field));
+    }
+    Ok(())
+}
+
+fn validate_auth_size(
+    value: &[u8],
+    limit: usize,
+    field: &'static str,
+) -> Result<(), AuthMethodError> {
+    if value.len() > limit {
+        return Err(AuthMethodError::FieldTooLarge(field));
+    }
+    Ok(())
+}
+
+fn validate_prompt_count(count: usize) -> Result<(), AuthMethodError> {
+    if count > MAX_AUTH_PROMPTS {
+        return Err(AuthMethodError::FieldTooLarge("prompt count"));
+    }
+    Ok(())
+}
+
+fn encode_userauth_prefix(
+    context: &UserAuthContext,
+    method: &[u8],
+) -> Result<Vec<u8>, AuthMethodError> {
+    let mut encoded = vec![USERAUTH_REQUEST];
+    append_auth_string(&mut encoded, context.username.as_bytes(), MAX_FIELD, "username")?;
+    append_auth_string(&mut encoded, context.service.as_bytes(), MAX_FIELD, "service")?;
+    append_auth_string(&mut encoded, method, MAX_FIELD, "method")?;
+    ensure_auth_message_size(&encoded)
+}
+
+fn append_auth_string(
+    output: &mut Vec<u8>,
+    value: &[u8],
+    limit: usize,
+    field: &'static str,
+) -> Result<(), AuthMethodError> {
+    validate_auth_size(value, limit, field)?;
+    let length = u32::try_from(value.len()).map_err(|_| AuthMethodError::FieldTooLarge(field))?;
+    output.extend_from_slice(&length.to_be_bytes());
+    output.extend_from_slice(value);
+    Ok(())
+}
+
+fn append_auth_count(
+    output: &mut Vec<u8>,
+    count: usize,
+    field: &'static str,
+) -> Result<(), AuthMethodError> {
+    let count = u32::try_from(count).map_err(|_| AuthMethodError::FieldTooLarge(field))?;
+    output.extend_from_slice(&count.to_be_bytes());
+    Ok(())
+}
+
+fn read_auth_string<'a>(
+    input: &'a [u8],
+    limit: usize,
+    field: &'static str,
+) -> Result<(&'a [u8], &'a [u8]), AuthMethodError> {
+    let length = read_auth_u32(input, field)? as usize;
+    if length > limit {
+        return Err(AuthMethodError::FieldTooLarge(field));
+    }
+    let end = 4usize.checked_add(length).ok_or(AuthMethodError::FieldTooLarge(field))?;
+    let value =
+        input.get(4..end).ok_or(AuthMethodError::MalformedMessage("truncated SSH string"))?;
+    Ok((value, &input[end..]))
+}
+
+fn read_auth_u32(input: &[u8], field: &'static str) -> Result<u32, AuthMethodError> {
+    let bytes = input.get(..4).ok_or(AuthMethodError::MalformedMessage(field))?;
+    Ok(u32::from_be_bytes(bytes.try_into().map_err(|_| AuthMethodError::MalformedMessage(field))?))
+}
+
+fn ensure_auth_message_size(encoded: &[u8]) -> Result<Vec<u8>, AuthMethodError> {
+    if encoded.len() > MAX_AUTH_MESSAGE {
+        return Err(AuthMethodError::FieldTooLarge("authentication message"));
+    }
+    Ok(encoded.to_vec())
+}
+
 pub(crate) fn publickey_signature_payload(
     context: &PublicKeyAuthContext,
     algorithm: &str,
@@ -893,6 +1375,120 @@ mod tests {
             builder.critical_option(name, value).expect("critical");
         }
         builder.sign(&ca).expect("certificate").to_bytes().expect("encoding")
+    }
+
+    #[test]
+    fn none_password_and_keyboard_interactive_requests_use_rfc4252_shapes() {
+        let context = UserAuthContext::new("alice", "ssh-connection").expect("context");
+        let none = NoneAuthRequest::new(context.clone()).encode().expect("none");
+        assert_eq!(none[0], USERAUTH_REQUEST);
+        let (username, rest) = read_auth_string(&none[1..], MAX_FIELD, "username").expect("user");
+        let (service, rest) = read_auth_string(rest, MAX_FIELD, "service").expect("service");
+        let (method, trailing) = read_auth_string(rest, MAX_FIELD, "method").expect("method");
+        assert_eq!(username, b"alice");
+        assert_eq!(service, b"ssh-connection");
+        assert_eq!(method, USERAUTH_NONE_METHOD);
+        assert!(trailing.is_empty());
+
+        let password =
+            PasswordAuthRequest::new(context.clone(), b"secret".to_vec()).expect("password");
+        let encoded = password.encode().expect("password wire");
+        let prefix_len = encoded.len() - (1 + 4 + 6);
+        assert_eq!(encoded[prefix_len], 0);
+        assert_eq!(&encoded[prefix_len + 1..prefix_len + 5], &(6u32.to_be_bytes()));
+        assert_eq!(&encoded[prefix_len + 5..], b"secret");
+        assert!(!format!("{password:?}").contains("secret"));
+
+        let changed = PasswordAuthRequest::change(context.clone(), b"old", b"new").expect("change");
+        let changed_wire = changed.encode().expect("change wire");
+        let change_flag = changed_wire.iter().position(|byte| *byte == 1).expect("change flag");
+        assert_eq!(changed_wire[change_flag], 1);
+        assert!(changed.is_change());
+
+        let interactive = KeyboardInteractiveRequest::new(context, b"en-US", b"otp")
+            .expect("keyboard interactive")
+            .encode()
+            .expect("keyboard wire");
+        assert_eq!(interactive[0], USERAUTH_REQUEST);
+        assert!(
+            interactive
+                .windows(USERAUTH_KEYBOARD_INTERACTIVE_METHOD.len())
+                .any(|window| { window == USERAUTH_KEYBOARD_INTERACTIVE_METHOD })
+        );
+    }
+
+    #[test]
+    fn keyboard_interactive_info_and_responses_round_trip_with_bounds() {
+        let info = KeyboardInteractiveInfoRequest::new(
+            b"login",
+            b"one-time code",
+            b"en-US",
+            vec![
+                KeyboardInteractivePrompt::new(b"Code: ", false).expect("prompt"),
+                KeyboardInteractivePrompt::new(b"Confirm", true).expect("prompt"),
+            ],
+        )
+        .expect("info");
+        let encoded = info.encode().expect("info wire");
+        let decoded = KeyboardInteractiveInfoRequest::decode(&encoded).expect("info decode");
+        assert_eq!(decoded, info);
+        assert_eq!(decoded.prompts()[0].text(), b"Code: ");
+        assert!(!decoded.prompts()[0].echo());
+
+        let response = KeyboardInteractiveResponse::new(vec![b"123456".to_vec(), b"yes".to_vec()])
+            .expect("response");
+        let response_wire = response.encode().expect("response wire");
+        assert_eq!(
+            KeyboardInteractiveResponse::decode(&response_wire).expect("response decode"),
+            response
+        );
+        assert!(!format!("{response:?}").contains("123456"));
+
+        let mut too_many = vec![USERAUTH_INFO_REQUEST];
+        append_auth_string(&mut too_many, b"", MAX_FIELD, "name").expect("name");
+        append_auth_string(&mut too_many, b"", MAX_FIELD, "instruction").expect("instruction");
+        append_auth_string(&mut too_many, b"", MAX_FIELD, "language tag").expect("language");
+        too_many.extend_from_slice(
+            &(u32::try_from(MAX_AUTH_PROMPTS).expect("prompt limit") + 1).to_be_bytes(),
+        );
+        assert_eq!(
+            KeyboardInteractiveInfoRequest::decode(&too_many),
+            Err(AuthMethodError::FieldTooLarge("prompt count"))
+        );
+
+        let mut bad_echo = info.encode().expect("info wire");
+        *bad_echo.last_mut().expect("echo") = 2;
+        assert_eq!(
+            KeyboardInteractiveInfoRequest::decode(&bad_echo),
+            Err(AuthMethodError::MalformedMessage("invalid prompt echo flag"))
+        );
+    }
+
+    #[test]
+    fn non_publickey_auth_codecs_reject_nul_truncation_and_unbounded_fields() {
+        assert_eq!(
+            UserAuthContext::new("alice\0", "ssh-connection"),
+            Err(AuthMethodError::InvalidField("username"))
+        );
+        assert_eq!(
+            PasswordAuthRequest::new(
+                UserAuthContext::new("alice", "ssh-connection").expect("context"),
+                vec![0; MAX_AUTH_PASSWORD + 1]
+            ),
+            Err(AuthMethodError::FieldTooLarge("password"))
+        );
+        assert_eq!(
+            KeyboardInteractiveInfoRequest::decode(&[USERAUTH_INFO_REQUEST]),
+            Err(AuthMethodError::MalformedMessage("name"))
+        );
+        assert_eq!(
+            KeyboardInteractiveResponse::decode(&[USERAUTH_INFO_RESPONSE, 0, 0, 0]),
+            Err(AuthMethodError::MalformedMessage("response count"))
+        );
+        assert_eq!(
+            KeyboardInteractiveResponse::decode(&[USERAUTH_INFO_RESPONSE, 0, 0, 0, 1]),
+            Err(AuthMethodError::MalformedMessage("response"))
+        );
     }
 
     #[test]

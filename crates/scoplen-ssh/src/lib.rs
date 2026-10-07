@@ -27,10 +27,12 @@ pub use agent::{
     MAX_AGENT_IDENTITIES, MAX_AGENT_KEY_BLOB, MAX_AGENT_SIGN_DATA,
 };
 pub use authentication::{
-    CertificateKind, CertificateValidationError, CertificateValidationPolicy, Ed25519SshSigner,
-    HostKey, HostKeyVerificationError, HostKeyVerifier, P256SshSigner, PublicKeyAuthContext,
-    PublicKeyAuthRequest, PublicKeyIdentity, SignatureAlgorithm, Signer, SignerError,
-    SshCertificate, UserCertificate, verify_host_key,
+    AuthMethodError, CertificateKind, CertificateValidationError, CertificateValidationPolicy,
+    Ed25519SshSigner, HostKey, HostKeyVerificationError, HostKeyVerifier,
+    KeyboardInteractiveInfoRequest, KeyboardInteractivePrompt, KeyboardInteractiveRequest,
+    KeyboardInteractiveResponse, NoneAuthRequest, P256SshSigner, PasswordAuthRequest,
+    PublicKeyAuthContext, PublicKeyAuthRequest, PublicKeyIdentity, SignatureAlgorithm, Signer,
+    SignerError, SshCertificate, UserAuthContext, UserCertificate, verify_host_key,
 };
 pub use policy::{AlgorithmCategory, AlgorithmPolicyError, HostAlgorithmPolicy};
 pub use security_key::{

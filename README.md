@@ -36,6 +36,9 @@ Exact-key remove-identity requests are also supported with bounded public-key bl
 smart-card operations, Pageant, and forwarding remain open.
 The forwarding boundary now fails closed by default and can require an authorizer for every
 forwarded signature before dispatch; the SSH `auth-agent` channel integration remains open.
+RFC 4252 `none`, `password` (including change), and keyboard-interactive request, prompt, and
+response codecs are available with bounded fields and zeroizing password or response storage;
+concrete SSH engine integration and RSA signing remain open.
 The `scoplen-api` crate exposes the K-3 error-code registry, RFC 9457 problem details, and device
 challenge, signed-device request, and token response JSON codecs, plus K-4 session, change-feed,
 write-batch, acknowledgement, snapshot, version-history, content-free notification, and account

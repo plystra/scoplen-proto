@@ -46,6 +46,9 @@ All notable changes to `scoplen-proto` will be recorded here.
   regression test for the public logging surface.
 - Added a fail-closed per-profile forwarding policy and authorizer hook that gates every forwarded
   signature before server dispatch, including framed-stream serving and allow or deny tests.
+- Added bounded RFC 4252 `none`, `password` and password-change, and keyboard-interactive request,
+  prompt, and response codecs; password and response bytes use zeroizing secret storage and
+  malformed, NUL, truncation, and size failure paths are covered.
 - Added the stable HTTP error-code registry and RFC 9457 problem details with JSON and deterministic
   CBOR codecs, including malformed-input tests and a published CBOR vector.
 - Extended the stable error-code registry for authenticated sync HTTP adapters with

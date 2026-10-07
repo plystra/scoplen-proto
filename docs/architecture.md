@@ -45,3 +45,7 @@ payloads and lock credentials are not emitted through ordinary diagnostics.
 Forwarded agent serving uses an explicit per-profile policy that is disabled by default and invokes
 an authorizer for each signature before the key store; the SSH `auth-agent` channel integration is
 still open.
+The authentication boundary also encodes `none`, `password` and password-change, and
+keyboard-interactive exchanges with bounded context, prompt, and response fields; password and
+interactive response bytes are held in zeroizing secret containers. Concrete engine integration
+and RSA signing remain open.
