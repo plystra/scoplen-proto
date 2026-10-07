@@ -38,11 +38,14 @@ requests and responses, bounded
 request correlation, and the OpenSSH `limits@openssh.com`, `posix-rename@openssh.com`,
 `statvfs@openssh.com`, `fstatvfs@openssh.com`, `hardlink@openssh.com`, `fsync@openssh.com`,
 `lsetstat@openssh.com`, `expand-path@openssh.com`, and `copy-data` extensions, with binary-safe
-handles and extension data. These are protocol boundaries; concrete russh connection and channel
-engines, a native Win32 backend for the injected Pageant discovery adapter, transfer
-resume/progress, dynamic SOCKS listeners, and interoperability work remain open. The auth-agent
-channel boundary does not claim concrete engine scheduling or wire interoperability until those
-workstreams are implemented and tested.
+handles and extension data. A concrete `russh` adapter now owns TCP or caller-supplied stream
+ handshakes, validates raw keys and host certificates before invoking the trust callback, supports
+ password authentication, and exposes opaque session and `direct-tcpip` channels with PTY, shell,
+ exec, bounded data, EOF, close, and peer-event operations. The adapter keeps the engine types out
+ of the public API. A native Win32 backend for the injected Pageant discovery adapter, transfer
+ resume/progress, dynamic SOCKS listeners, SFTP channel composition, and interoperability work
+ remain open. The auth-agent channel boundary does not claim concrete engine scheduling or wire
+ interoperability until those workstreams are implemented and tested.
 The `scoplen-api` crate exposes the K-3 error-code registry, RFC 9457 problem details, and device
 challenge, signed-device request, and token response JSON codecs, plus K-4 session, change-feed,
 write-batch, acknowledgement, snapshot, version-history, content-free notification, and account

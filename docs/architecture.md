@@ -38,7 +38,11 @@ channel-data fragments. `AuthAgentChannel` composes that adapter with the bounde
 `auth-agent@openssh.com` open, data, EOF, and close lifecycle; it validates channel numbers and
 peer packet limits and reports clean versus truncated close outcomes. Pageant named-pipe
 compatibility is available on Windows through the same bounded framing; legacy WM_COPYDATA discovery
-remains open. The concrete SSH transport, channel engine, and interoperability work remain open.
+remains open. The concrete `russh` client adapter now owns TCP and caller-supplied stream
+ handshakes, validates host keys and certificates before the trust callback, supports password
+ authentication, and exposes opaque session and `direct-tcpip` channels with PTY, shell, exec,
+ bounded data, EOF, close, and peer-event operations. The native Pageant backend, dynamic SOCKS
+ listeners, SFTP channel composition, and interoperability work remain open.
 The agent server can consume
 multiple bounded frames from a blocking stream through clean peer close while applying the same
 malformed and oversized-frame checks.
@@ -67,5 +71,6 @@ and symlink), binary-safe handles and extension data, attributes, status, and di
 responses, request-id correlation for bounded pipelining, and the OpenSSH `limits@openssh.com`,
 `posix-rename@openssh.com`, `statvfs@openssh.com`, `fstatvfs@openssh.com`, `hardlink@openssh.com`,
 `fsync@openssh.com`, `lsetstat@openssh.com`, `expand-path@openssh.com`, and `copy-data`
-requests and responses. Concrete russh channel integration, transfer resume/progress, and the
-interoperability matrix remain open.
+requests and responses. The `russh` channel adapter covers session and `direct-tcpip` channel
+ operations; transfer resume/progress, SFTP channel composition, and the interoperability matrix
+ remain open.

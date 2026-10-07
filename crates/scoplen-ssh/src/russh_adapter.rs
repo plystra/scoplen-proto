@@ -509,36 +509,52 @@ impl ClientChannel {
 
     /// Wait for the next peer event. `Ok(None)` means the engine closed the event stream.
     pub async fn next_event(&mut self) -> Result<Option<ChannelEvent>, ClientError> {
-        let Some(message) = self.channel.wait().await else {
-            return Ok(None);
-        };
-        let event = match message {
-            ChannelMsg::Data { data } => ChannelEvent::Data(data.to_vec()),
-            ChannelMsg::ExtendedData { data, ext } => ChannelEvent::ExtendedData {
-                data_type: ExtendedDataType::try_from(ext)
-                    .map_err(|_| ClientError::UnsupportedExtendedData(ext))?,
-                data: data.to_vec(),
-            },
-            ChannelMsg::Eof => ChannelEvent::Eof,
-            ChannelMsg::Close => ChannelEvent::Close,
-            ChannelMsg::ExitStatus { exit_status } => ChannelEvent::ExitStatus(exit_status),
-            ChannelMsg::ExitSignal { signal_name, core_dumped, error_message, lang_tag } => {
-                ChannelEvent::ExitSignal {
-                    signal: signal_name_text(&signal_name).to_owned(),
-                    core_dumped,
-                    error_message,
-                    language_tag: lang_tag,
+        loop {
+            let Some(message) = self.channel.wait().await else {
+                return Ok(None);
+            };
+            let event = match message {
+                ChannelMsg::Data { data } => ChannelEvent::Data(data.to_vec()),
+                ChannelMsg::ExtendedData { data, ext } => ChannelEvent::ExtendedData {
+                    data_type: ExtendedDataType::try_from(ext)
+                        .map_err(|_| ClientError::UnsupportedExtendedData(ext))?,
+                    data: data.to_vec(),
+                },
+                ChannelMsg::Eof => ChannelEvent::Eof,
+                ChannelMsg::Close => ChannelEvent::Close,
+                ChannelMsg::ExitStatus { exit_status } => ChannelEvent::ExitStatus(exit_status),
+                ChannelMsg::ExitSignal { signal_name, core_dumped, error_message, lang_tag } => {
+                    ChannelEvent::ExitSignal {
+                        signal: signal_name_text(&signal_name).to_owned(),
+                        core_dumped,
+                        error_message,
+                        language_tag: lang_tag,
+                    }
                 }
-            }
-            ChannelMsg::Success => ChannelEvent::Success,
-            ChannelMsg::Failure => ChannelEvent::Failure,
-            ChannelMsg::OpenFailure(failure) => ChannelEvent::OpenFailure {
-                code: failure.code(),
-                reason: failure.description().to_owned(),
-            },
-            _ => return Err(ClientError::UnexpectedChannelEvent),
-        };
-        Ok(Some(event))
+                ChannelMsg::Success => ChannelEvent::Success,
+                ChannelMsg::Failure => ChannelEvent::Failure,
+                ChannelMsg::OpenFailure(failure) => ChannelEvent::OpenFailure {
+                    code: failure.code(),
+                    reason: failure.description().to_owned(),
+                },
+                // Window updates and request echoes are consumed by the engine and are not
+                // user-visible channel events.
+                ChannelMsg::WindowAdjusted { .. }
+                | ChannelMsg::RequestPty { .. }
+                | ChannelMsg::RequestShell { .. }
+                | ChannelMsg::Exec { .. }
+                | ChannelMsg::Signal { .. }
+                | ChannelMsg::RequestSubsystem { .. }
+                | ChannelMsg::RequestX11 { .. }
+                | ChannelMsg::SetEnv { .. }
+                | ChannelMsg::WindowChange { .. }
+                | ChannelMsg::AgentForward { .. }
+                | ChannelMsg::XonXoff { .. }
+                | ChannelMsg::Open { .. } => continue,
+                _ => return Err(ClientError::UnexpectedChannelEvent),
+            };
+            return Ok(Some(event));
+        }
     }
 }
 
