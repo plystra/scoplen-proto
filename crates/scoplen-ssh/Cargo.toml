@@ -11,6 +11,9 @@ workspace = true
 
 [dependencies]
 scoplen-crypto = { path = "../scoplen-crypto", version = "0.1.0" }
+russh = { version = "=0.63.1", default-features = false, features = ["flate2", "ring", "rsa"] }
 ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["ed25519", "getrandom", "p256", "rsa", "std"] }
 signature = "3.0.0"
 thiserror.workspace = true
+tokio = { version = "1.17.0", features = ["io-util", "net", "rt-multi-thread", "sync", "time"] }
+zeroize = "1.8"
