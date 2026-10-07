@@ -540,6 +540,44 @@ impl ClientConnection {
             .map_err(ClientError::from)
     }
 
+    /// Ask the server to listen for a remote TCP forwarding definition.
+    ///
+    /// A zero `port` asks the server to allocate an available port. An empty address follows
+    /// RFC 4254 and asks the server to bind all suitable interfaces.
+    pub async fn request_tcpip_forward(
+        &self,
+        address: &str,
+        port: u32,
+    ) -> Result<u32, ClientError> {
+        validate_text(address.as_bytes(), MAX_CHANNEL_ADDRESS, "forward address", false)
+            .map_err(ClientError::Config)?;
+        self.handle.tcpip_forward(address.to_owned(), port).await.map_err(ClientError::from)
+    }
+
+    /// Cancel a remote TCP forwarding definition.
+    pub async fn cancel_tcpip_forward(&self, address: &str, port: u32) -> Result<(), ClientError> {
+        validate_text(address.as_bytes(), MAX_CHANNEL_ADDRESS, "forward address", false)
+            .map_err(ClientError::Config)?;
+        self.handle.cancel_tcpip_forward(address.to_owned(), port).await.map_err(ClientError::from)
+    }
+
+    /// Ask the server to listen for a remote Unix-socket forwarding definition.
+    pub async fn request_streamlocal_forward(&self, socket_path: &str) -> Result<(), ClientError> {
+        validate_text(socket_path.as_bytes(), MAX_CHANNEL_ADDRESS, "socket path", true)
+            .map_err(ClientError::Config)?;
+        self.handle.streamlocal_forward(socket_path.to_owned()).await.map_err(ClientError::from)
+    }
+
+    /// Cancel a remote Unix-socket forwarding definition.
+    pub async fn cancel_streamlocal_forward(&self, socket_path: &str) -> Result<(), ClientError> {
+        validate_text(socket_path.as_bytes(), MAX_CHANNEL_ADDRESS, "socket path", true)
+            .map_err(ClientError::Config)?;
+        self.handle
+            .cancel_streamlocal_forward(socket_path.to_owned())
+            .await
+            .map_err(ClientError::from)
+    }
+
     fn channel_permit(&self) -> Result<OwnedSemaphorePermit, ClientError> {
         Arc::clone(&self.channel_slots)
             .try_acquire_owned()
@@ -1194,6 +1232,83 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    enum ForwardEvent {
+        Tcp { address: String, port: u32 },
+        CancelTcp { address: String, port: u32 },
+        Streamlocal { path: String },
+        CancelStreamlocal { path: String },
+    }
+
+    #[derive(Clone)]
+    struct ForwardServer {
+        allow: bool,
+        events: mpsc::Sender<ForwardEvent>,
+    }
+
+    impl russh::server::Handler for ForwardServer {
+        type Error = russh::Error;
+
+        async fn auth_password(
+            &mut self,
+            _user: &str,
+            _password: &str,
+        ) -> Result<russh::server::Auth, Self::Error> {
+            Ok(russh::server::Auth::Accept)
+        }
+
+        async fn tcpip_forward(
+            &mut self,
+            address: &str,
+            port: &mut u32,
+            _session: &mut russh::server::Session,
+        ) -> Result<bool, Self::Error> {
+            if self.allow && *port == 0 {
+                *port = 4242;
+            }
+            let _ = self
+                .events
+                .send(ForwardEvent::Tcp { address: address.to_owned(), port: *port })
+                .await;
+            Ok(self.allow)
+        }
+
+        async fn cancel_tcpip_forward(
+            &mut self,
+            address: &str,
+            port: u32,
+            _session: &mut russh::server::Session,
+        ) -> Result<bool, Self::Error> {
+            let _ = self
+                .events
+                .send(ForwardEvent::CancelTcp { address: address.to_owned(), port })
+                .await;
+            Ok(self.allow)
+        }
+
+        async fn streamlocal_forward(
+            &mut self,
+            socket_path: &str,
+            _session: &mut russh::server::Session,
+        ) -> Result<bool, Self::Error> {
+            let _ =
+                self.events.send(ForwardEvent::Streamlocal { path: socket_path.to_owned() }).await;
+            Ok(self.allow)
+        }
+
+        async fn cancel_streamlocal_forward(
+            &mut self,
+            socket_path: &str,
+            _session: &mut russh::server::Session,
+        ) -> Result<bool, Self::Error> {
+            let _ = self
+                .events
+                .send(ForwardEvent::CancelStreamlocal { path: socket_path.to_owned() })
+                .await;
+            Ok(self.allow)
+        }
+    }
+
     #[test]
     fn config_rejects_empty_host_and_zero_port() {
         let verifier = |_host: &str, _key: &HostKey| Ok(());
@@ -1418,6 +1533,135 @@ mod tests {
             Some(ChannelEvent::Data(bytes)) if bytes == b"streamlocal payload"
         ));
         channel.close().await.expect("close streamlocal channel");
+        connection.disconnect().await.expect("disconnect client");
+    }
+
+    async fn connect_forward_server(
+        allow: bool,
+    ) -> (ClientConnection, mpsc::Receiver<ForwardEvent>) {
+        let (events, received) = mpsc::channel(8);
+        let mut server_config = russh::server::Config::default();
+        server_config.keys.push(
+            PrivateKey::random(
+                &mut ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng),
+                Algorithm::Ed25519,
+            )
+            .expect("server key"),
+        );
+        let server_config = Arc::new(server_config);
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind server");
+        let address = listener.local_addr().expect("server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept client");
+            let _ =
+                russh::server::run_stream(server_config, stream, ForwardServer { allow, events })
+                    .await;
+        });
+
+        let verifier = |_host: &str, _key: &HostKey| Ok(());
+        let config = ClientConfig::new("127.0.0.1", address.port(), verifier).expect("config");
+        let mut connection = ClientConnection::connect(config).await.expect("connect client");
+        connection.authenticate_password("user", b"password").await.expect("authenticate client");
+        (connection, received)
+    }
+
+    #[tokio::test]
+    async fn remote_forward_requests_round_trip_and_fail_closed() {
+        let (connection, mut events) = connect_forward_server(true).await;
+        assert_eq!(
+            connection
+                .request_tcpip_forward("127.0.0.1", 0)
+                .await
+                .expect("allocate remote TCP port"),
+            4242
+        );
+        assert_eq!(
+            timeout(Duration::from_secs(5), events.recv())
+                .await
+                .expect("TCP forward callback")
+                .expect("TCP forward event"),
+            ForwardEvent::Tcp { address: "127.0.0.1".to_owned(), port: 4242 }
+        );
+        connection
+            .cancel_tcpip_forward("127.0.0.1", 4242)
+            .await
+            .expect("cancel remote TCP forward");
+        assert_eq!(
+            timeout(Duration::from_secs(5), events.recv())
+                .await
+                .expect("TCP cancel callback")
+                .expect("TCP cancel event"),
+            ForwardEvent::CancelTcp { address: "127.0.0.1".to_owned(), port: 4242 }
+        );
+        connection
+            .request_streamlocal_forward("/run/scoplen.sock")
+            .await
+            .expect("create remote streamlocal forward");
+        assert_eq!(
+            timeout(Duration::from_secs(5), events.recv())
+                .await
+                .expect("streamlocal forward callback")
+                .expect("streamlocal forward event"),
+            ForwardEvent::Streamlocal { path: "/run/scoplen.sock".to_owned() }
+        );
+        connection
+            .cancel_streamlocal_forward("/run/scoplen.sock")
+            .await
+            .expect("cancel remote streamlocal forward");
+        assert_eq!(
+            timeout(Duration::from_secs(5), events.recv())
+                .await
+                .expect("streamlocal cancel callback")
+                .expect("streamlocal cancel event"),
+            ForwardEvent::CancelStreamlocal { path: "/run/scoplen.sock".to_owned() }
+        );
+        connection.disconnect().await.expect("disconnect client");
+
+        let (connection, mut events) = connect_forward_server(false).await;
+        assert!(matches!(
+            connection.request_tcpip_forward("127.0.0.1", 0).await,
+            Err(ClientError::Channel)
+        ));
+        assert_eq!(
+            timeout(Duration::from_secs(5), events.recv())
+                .await
+                .expect("rejected TCP callback")
+                .expect("rejected TCP event"),
+            ForwardEvent::Tcp { address: "127.0.0.1".to_owned(), port: 0 }
+        );
+        assert!(matches!(
+            connection.cancel_tcpip_forward("127.0.0.1", 4242).await,
+            Err(ClientError::Channel)
+        ));
+        assert_eq!(
+            timeout(Duration::from_secs(5), events.recv())
+                .await
+                .expect("rejected TCP cancel callback")
+                .expect("rejected TCP cancel event"),
+            ForwardEvent::CancelTcp { address: "127.0.0.1".to_owned(), port: 4242 }
+        );
+        assert!(matches!(
+            connection.request_streamlocal_forward("/run/scoplen.sock").await,
+            Err(ClientError::Channel)
+        ));
+        assert_eq!(
+            timeout(Duration::from_secs(5), events.recv())
+                .await
+                .expect("rejected streamlocal callback")
+                .expect("rejected streamlocal event"),
+            ForwardEvent::Streamlocal { path: "/run/scoplen.sock".to_owned() }
+        );
+        assert!(matches!(
+            connection.cancel_streamlocal_forward("/run/scoplen.sock").await,
+            Err(ClientError::Channel)
+        ));
+        assert_eq!(
+            timeout(Duration::from_secs(5), events.recv())
+                .await
+                .expect("rejected streamlocal cancel callback")
+                .expect("rejected streamlocal cancel event"),
+            ForwardEvent::CancelStreamlocal { path: "/run/scoplen.sock".to_owned() }
+        );
         connection.disconnect().await.expect("disconnect client");
     }
 
