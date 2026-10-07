@@ -631,6 +631,16 @@ impl ClientChannel {
         self.channel.request_subsystem(want_reply, name).await.map_err(ClientError::from)
     }
 
+    /// Request OpenSSH agent forwarding on this session channel.
+    ///
+    /// A requested reply is surfaced as [`ChannelEvent::Success`] or
+    /// [`ChannelEvent::Failure`] by [`Self::next_event`]. The caller must enable
+    /// a forwarded-agent service before using this request; forwarding remains
+    /// disabled by default.
+    pub async fn request_agent_forward(&self, want_reply: bool) -> Result<(), ClientError> {
+        self.channel.agent_forward(want_reply).await.map_err(ClientError::from)
+    }
+
     /// Notify the remote PTY of a bounded terminal resize.
     ///
     /// The dimensions use the same RFC 4254 `window-change` shape as the engine-independent
@@ -1080,6 +1090,48 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct AgentForwardServer {
+        allow: bool,
+        requests: mpsc::Sender<bool>,
+    }
+
+    impl russh::server::Handler for AgentForwardServer {
+        type Error = russh::Error;
+
+        async fn auth_password(
+            &mut self,
+            _user: &str,
+            _password: &str,
+        ) -> Result<russh::server::Auth, Self::Error> {
+            Ok(russh::server::Auth::Accept)
+        }
+
+        async fn channel_open_session(
+            &mut self,
+            _channel: russh::Channel<russh::server::Msg>,
+            reply: russh::server::ChannelOpenHandle,
+            _session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            reply.accept().await;
+            Ok(())
+        }
+
+        async fn agent_request(
+            &mut self,
+            channel: russh::ChannelId,
+            session: &mut russh::server::Session,
+        ) -> Result<bool, Self::Error> {
+            let _ = self.requests.send(self.allow).await;
+            if self.allow {
+                session.channel_success(channel)?;
+            } else {
+                session.channel_failure(channel)?;
+            }
+            Ok(self.allow)
+        }
+    }
+
     #[test]
     fn config_rejects_empty_host_and_zero_port() {
         let verifier = |_host: &str, _key: &HostKey| Ok(());
@@ -1206,6 +1258,57 @@ mod tests {
             .expect("resize event");
         assert_eq!(observed, expected);
         connection.disconnect().await.expect("disconnect client");
+    }
+
+    async fn agent_forward_request_case(allow: bool) -> ChannelEvent {
+        let (requests, mut received) = mpsc::channel(1);
+        let mut server_config = russh::server::Config::default();
+        server_config.keys.push(
+            PrivateKey::random(
+                &mut ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng),
+                Algorithm::Ed25519,
+            )
+            .expect("server key"),
+        );
+        let server_config = Arc::new(server_config);
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind server");
+        let address = listener.local_addr().expect("server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept client");
+            let _ = russh::server::run_stream(
+                server_config,
+                stream,
+                AgentForwardServer { allow, requests },
+            )
+            .await;
+        });
+
+        let verifier = |_host: &str, _key: &HostKey| Ok(());
+        let config = ClientConfig::new("127.0.0.1", address.port(), verifier).expect("config");
+        let mut connection = ClientConnection::connect(config).await.expect("connect client");
+        connection.authenticate_password("user", b"password").await.expect("authenticate client");
+        let mut channel = connection.open_session().await.expect("open session");
+        channel.request_agent_forward(true).await.expect("request agent forwarding");
+        assert_eq!(
+            timeout(Duration::from_secs(5), received.recv())
+                .await
+                .expect("agent request callback")
+                .expect("agent request event"),
+            allow
+        );
+        let event = timeout(Duration::from_secs(5), channel.next_event())
+            .await
+            .expect("agent request response")
+            .expect("agent request response result")
+            .expect("agent request response event");
+        connection.disconnect().await.expect("disconnect client");
+        event
+    }
+
+    #[tokio::test]
+    async fn agent_forward_request_surfaces_server_success_and_failure() {
+        assert_eq!(agent_forward_request_case(true).await, ChannelEvent::Success);
+        assert_eq!(agent_forward_request_case(false).await, ChannelEvent::Failure);
     }
 
     #[tokio::test]
