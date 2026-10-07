@@ -16,6 +16,7 @@ mod channels;
 mod policy;
 mod security_key;
 mod sftp;
+mod socks;
 mod transport;
 
 #[cfg(unix)]
@@ -57,6 +58,10 @@ pub use sftp::{
     MAX_SFTP_EXTENSION_DATA, MAX_SFTP_EXTENSIONS, MAX_SFTP_HANDLE, MAX_SFTP_NAME_ENTRIES,
     MAX_SFTP_OUTSTANDING, MAX_SFTP_PACKET, MAX_SFTP_STRING, SftpAttributes, SftpClient, SftpError,
     SftpExtension, SftpLimits, SftpNameEntry, SftpPacket,
+};
+pub use socks::{
+    MAX_SOCKS_BUFFER, MAX_SOCKS_DOMAIN, MAX_SOCKS_USER_ID, SocksAddress, SocksBindAddress,
+    SocksConnectRequest, SocksError, SocksHandshake, SocksProgress, SocksReply, SocksVersion,
 };
 pub use transport::{
     EXT_INFO_CLIENT, EXT_INFO_SERVER, KeyExchangeFamily, NegotiatedTransport, STRICT_KEX_CLIENT,
