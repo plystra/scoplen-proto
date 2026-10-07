@@ -36,6 +36,10 @@ All notable changes to `scoplen-proto` will be recorded here.
   validation and oversized-response tests. Pageant compatibility and forwarding remain open.
 - Added a bounded Pageant named-pipe agent adapter on Windows, reusing the standard agent framing
   and covering fragmented responses, malformed frames, and oversized responses.
+- Added the bounded legacy Pageant `WM_COPYDATA` discovery adapter with the documented
+  `PageantRequest%08x` mapping name, strict ASCII/NUL descriptor checks, bounded mapping framing,
+  and injectable platform backend tests. Native Win32 window and mapping calls remain owned by
+  the consumer platform layer; the safe protocol crate does not claim that runtime integration.
 - Added bounded agent management requests for removing all identities and locking or unlocking
   an agent, with opaque failure mapping and passphrase limits.
 - Added bounded smart-card provider load and removal requests with PIN redaction, flag preservation,

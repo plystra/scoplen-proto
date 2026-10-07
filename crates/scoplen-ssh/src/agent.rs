@@ -5,7 +5,9 @@
 //! This module owns the OpenSSH agent framing and the request/response boundary so every adapter
 //! applies the same length, ordering, and failure rules. [`AuthAgentChannel`] composes those
 //! rules with the engine-independent RFC 4254 `auth-agent@openssh.com` channel lifecycle; a
-//! concrete SSH engine still owns channel allocation, scheduling, and window updates.
+//! concrete SSH engine still owns channel allocation, scheduling, and window updates. Legacy
+//! Pageant `WM_COPYDATA` discovery is represented by a safe, injectable backend boundary; native
+//! window and file-mapping calls stay in the platform layer.
 
 #![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 
@@ -42,6 +44,19 @@ const CONSTRAIN_LIFETIME: u8 = 1;
 const CONSTRAIN_CONFIRM: u8 = 2;
 const CONSTRAIN_MAXSIGN: u8 = 3;
 const CONSTRAIN_EXTENSION: u8 = 255;
+
+/// Pageant's legacy `WM_COPYDATA` transaction identifier.
+pub const PAGEANT_WM_COPYDATA_ID: u32 = 0x804e_50ba;
+/// Window class used by the legacy Pageant IPC endpoint.
+pub const PAGEANT_WM_COPYDATA_WINDOW_CLASS: &str = "Pageant";
+/// Window title used by the legacy Pageant IPC endpoint.
+pub const PAGEANT_WM_COPYDATA_WINDOW_TITLE: &str = "Pageant";
+/// Maximum complete legacy Pageant mapping, including the four-byte agent length.
+pub const PAGEANT_WM_COPYDATA_MAX_MSGLEN: usize = 262_144;
+const PAGEANT_WM_COPYDATA_MAPPING_PREFIX: &str = "PageantRequest";
+/// Length of Pageant's `PageantRequest%08x` mapping name, including its trailing NUL.
+pub const PAGEANT_WM_COPYDATA_MAPPING_NAME_LEN: usize =
+    PAGEANT_WM_COPYDATA_MAPPING_PREFIX.len() + 8 + 1;
 
 /// Maximum complete SSH agent payload, excluding the four-byte frame length.
 pub const MAX_AGENT_FRAME: usize = 256 * 1024;
@@ -106,6 +121,18 @@ pub enum AgentError {
     /// The transport adapter failed before a response was received.
     #[error("SSH agent transport failed: {0}")]
     Transport(String),
+    /// The legacy Pageant window was not found.
+    #[error("Pageant WM_COPYDATA window was not found")]
+    PageantWindowNotFound,
+    /// A legacy Pageant mapping name failed its ASCII and NUL-termination checks.
+    #[error("invalid Pageant WM_COPYDATA mapping name: {0}")]
+    InvalidPageantMappingName(&'static str),
+    /// Pageant rejected a legacy `WM_COPYDATA` message.
+    #[error("Pageant rejected the WM_COPYDATA request")]
+    PageantMessageRejected,
+    /// A legacy Pageant response mapping was truncated or malformed before agent decoding.
+    #[error("malformed Pageant WM_COPYDATA response: {0}")]
+    MalformedPageantResponse(&'static str),
     /// The backing key store failed while serving an agent request.
     #[error("SSH agent key store failed: {0}")]
     KeyStore(String),
@@ -537,6 +564,227 @@ impl<S> PageantAgentChannel<S> {
 impl<S: Read + Write> AgentChannel for PageantAgentChannel<S> {
     fn exchange(&mut self, request: &[u8]) -> Result<Vec<u8>, AgentError> {
         self.inner.exchange(request)
+    }
+}
+
+/// Validate a legacy Pageant mapping name.
+///
+/// Pageant receives the name through an untrusted `COPYDATASTRUCT`. The legacy endpoint requires
+/// an ASCII NUL-terminated name and treats the trailing NUL as part of `cbData`; the name must
+/// have the exact `PageantRequest%08x` shape before it reaches a platform backend.
+pub fn validate_pageant_wm_copydata_mapping_name(name: &[u8]) -> Result<(), AgentError> {
+    if name.is_empty() {
+        return Err(AgentError::InvalidPageantMappingName("empty name"));
+    }
+    if name.len() > PAGEANT_WM_COPYDATA_MAPPING_NAME_LEN {
+        return Err(AgentError::InvalidPageantMappingName("name is too long"));
+    }
+    if name.last() != Some(&0) {
+        return Err(AgentError::InvalidPageantMappingName("name is not NUL-terminated"));
+    }
+    if name[..name.len() - 1].contains(&0) {
+        return Err(AgentError::InvalidPageantMappingName("name contains an embedded NUL"));
+    }
+    if name[..name.len() - 1].iter().any(|byte| !byte.is_ascii()) {
+        return Err(AgentError::InvalidPageantMappingName("name is not ASCII"));
+    }
+    if name.len() != PAGEANT_WM_COPYDATA_MAPPING_NAME_LEN {
+        return Err(AgentError::InvalidPageantMappingName("name has the wrong length"));
+    }
+    if !name.starts_with(PAGEANT_WM_COPYDATA_MAPPING_PREFIX.as_bytes()) {
+        return Err(AgentError::InvalidPageantMappingName("name has the wrong prefix"));
+    }
+    if name[PAGEANT_WM_COPYDATA_MAPPING_PREFIX.len()..name.len() - 1]
+        .iter()
+        .any(|byte| !byte.is_ascii_hexdigit() || byte.is_ascii_uppercase())
+    {
+        return Err(AgentError::InvalidPageantMappingName("invalid thread ID"));
+    }
+    Ok(())
+}
+
+/// Construct the deterministic mapping name used for one Pageant request thread.
+#[must_use]
+pub fn pageant_wm_copydata_mapping_name(thread_id: u32) -> Vec<u8> {
+    let mut name = format!("{PAGEANT_WM_COPYDATA_MAPPING_PREFIX}{thread_id:08x}").into_bytes();
+    name.push(0);
+    name
+}
+
+/// The safe data representation of a legacy Pageant `COPYDATASTRUCT`.
+///
+/// A platform backend converts this value to the native structure. Keeping the representation in
+/// the protocol crate lets tests exercise the exact identifier, byte count, and NUL-terminated
+/// mapping name without importing Win32 FFI into `scoplen-ssh`.
+#[derive(Clone, Eq, PartialEq)]
+pub struct PageantWmCopyData {
+    mapping_name: Vec<u8>,
+}
+
+impl PageantWmCopyData {
+    /// Construct one validated Pageant message descriptor.
+    pub fn new(mapping_name: impl Into<Vec<u8>>) -> Result<Self, AgentError> {
+        let mapping_name = mapping_name.into();
+        validate_pageant_wm_copydata_mapping_name(&mapping_name)?;
+        Ok(Self { mapping_name })
+    }
+
+    /// Return the Pageant transaction identifier (`COPYDATASTRUCT::dwData`).
+    #[must_use]
+    pub const fn dw_data(&self) -> u32 {
+        PAGEANT_WM_COPYDATA_ID
+    }
+
+    /// Return the byte count passed as `COPYDATASTRUCT::cbData`.
+    #[must_use]
+    pub fn cb_data(&self) -> u32 {
+        // The constructor's bounded name validation makes this conversion infallible.
+        u32::try_from(self.mapping_name.len()).expect("bounded Pageant mapping name")
+    }
+
+    /// Return the NUL-terminated mapping name passed as `COPYDATASTRUCT::lpData`.
+    #[must_use]
+    pub fn mapping_name(&self) -> &[u8] {
+        &self.mapping_name
+    }
+}
+
+impl fmt::Debug for PageantWmCopyData {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PageantWmCopyData")
+            .field("dw_data", &self.dw_data())
+            .field("cb_data", &self.cb_data())
+            .field("mapping_name_len", &self.mapping_name.len())
+            .finish()
+    }
+}
+
+/// Safe operations required from a platform implementation of legacy Pageant IPC.
+///
+/// `scoplen-ssh` intentionally does not call Win32 FFI. A desktop or platform crate supplies this
+/// backend and owns the native window handle, file-mapping handle, and message lifetime. The
+/// backend must keep its mapping alive until [`AgentChannel::exchange`] returns.
+pub trait PageantWmCopyDataBackend {
+    /// Opaque native window-handle type.
+    type Window;
+    /// Opaque native file-mapping type.
+    type Mapping;
+
+    /// Return the native ID of the thread performing this exchange (`GetCurrentThreadId`).
+    fn current_thread_id(&self) -> u32;
+
+    /// Find the legacy Pageant window (`Pageant`, `Pageant`).
+    fn find_pageant_window(
+        &mut self,
+        class_name: &str,
+        window_title: &str,
+    ) -> Result<Option<Self::Window>, AgentError>;
+
+    /// Allocate a new read/write mapping with the exact requested capacity.
+    ///
+    /// The platform implementation rejects an already-existing mapping of the same name so an
+    /// unrelated process cannot provide its contents or choose a smaller capacity.
+    fn create_mapping(&mut self, name: &[u8], capacity: usize)
+    -> Result<Self::Mapping, AgentError>;
+
+    /// Copy one complete SSH agent request frame into the mapping at offset zero.
+    fn write_mapping(
+        &mut self,
+        mapping: &mut Self::Mapping,
+        bytes: &[u8],
+    ) -> Result<(), AgentError>;
+
+    /// Send the validated `WM_COPYDATA` descriptor synchronously.
+    ///
+    /// `Ok(false)` represents a native `SendMessage` result of zero and is mapped to
+    /// [`AgentError::PageantMessageRejected`].
+    fn send_copydata(
+        &mut self,
+        window: &Self::Window,
+        mapping: &mut Self::Mapping,
+        message: &PageantWmCopyData,
+    ) -> Result<bool, AgentError>;
+
+    /// Read exactly `length` bytes from the mapping at `offset`.
+    fn read_mapping(
+        &mut self,
+        mapping: &Self::Mapping,
+        offset: usize,
+        length: usize,
+    ) -> Result<Vec<u8>, AgentError>;
+}
+
+/// Legacy Pageant `WM_COPYDATA` agent channel over an injected platform backend.
+pub struct PageantWmCopyDataChannel<B> {
+    backend: B,
+}
+
+impl<B> PageantWmCopyDataChannel<B> {
+    /// Wrap a platform backend that can provide the native thread ID for each exchange.
+    #[must_use]
+    pub fn new(backend: B) -> Self {
+        Self { backend }
+    }
+
+    /// Return the platform backend after the channel has finished using it.
+    #[must_use]
+    pub fn into_inner(self) -> B {
+        self.backend
+    }
+}
+
+impl<B: PageantWmCopyDataBackend> AgentChannel for PageantWmCopyDataChannel<B> {
+    fn exchange(&mut self, request: &[u8]) -> Result<Vec<u8>, AgentError> {
+        // Validate the standard SSH agent frame before creating a native mapping or sending a
+        // window message. Pageant's capacity includes the four-byte frame length.
+        if request.len() > PAGEANT_WM_COPYDATA_MAX_MSGLEN {
+            return Err(AgentError::FrameTooLarge);
+        }
+        AgentMessage::decode_frame(request)?;
+
+        let window = self
+            .backend
+            .find_pageant_window(
+                PAGEANT_WM_COPYDATA_WINDOW_CLASS,
+                PAGEANT_WM_COPYDATA_WINDOW_TITLE,
+            )?
+            .ok_or(AgentError::PageantWindowNotFound)?;
+        let mapping_name = pageant_wm_copydata_mapping_name(self.backend.current_thread_id());
+        let descriptor = PageantWmCopyData::new(mapping_name)?;
+        let mut mapping = self
+            .backend
+            .create_mapping(descriptor.mapping_name(), PAGEANT_WM_COPYDATA_MAX_MSGLEN)?;
+        self.backend.write_mapping(&mut mapping, request)?;
+        if !self.backend.send_copydata(&window, &mut mapping, &descriptor)? {
+            return Err(AgentError::PageantMessageRejected);
+        }
+
+        let header = self.backend.read_mapping(&mapping, 0, 4)?;
+        if header.len() != 4 {
+            return Err(AgentError::MalformedPageantResponse("truncated length field"));
+        }
+        let payload_length = usize::try_from(u32::from_be_bytes(
+            header
+                .as_slice()
+                .try_into()
+                .map_err(|_| AgentError::MalformedPageantResponse("invalid length field"))?,
+        ))
+        .map_err(|_| AgentError::FrameTooLarge)?;
+        if payload_length == 0 {
+            return Err(AgentError::MalformedPageantResponse("empty agent payload"));
+        }
+        if payload_length > PAGEANT_WM_COPYDATA_MAX_MSGLEN - 4 {
+            return Err(AgentError::FrameTooLarge);
+        }
+
+        let frame_length = 4usize.checked_add(payload_length).ok_or(AgentError::FrameTooLarge)?;
+        let frame = self.backend.read_mapping(&mapping, 0, frame_length)?;
+        if frame.len() != frame_length {
+            return Err(AgentError::MalformedPageantResponse("truncated agent frame"));
+        }
+        AgentMessage::decode_frame(&frame)?;
+        Ok(frame)
     }
 }
 
@@ -1960,6 +2208,126 @@ mod tests {
         }
     }
 
+    struct FakePageantMapping {
+        bytes: Vec<u8>,
+    }
+
+    struct FakePageantBackend {
+        thread_id: u32,
+        window: Option<u8>,
+        response: Vec<u8>,
+        create_error: Option<AgentError>,
+        write_error: Option<AgentError>,
+        send_error: Option<AgentError>,
+        send_result: bool,
+        truncate_read_at: Option<usize>,
+        read_count: usize,
+        mapping_name: Option<Vec<u8>>,
+        descriptor: Option<PageantWmCopyData>,
+        request: Vec<u8>,
+    }
+
+    impl FakePageantBackend {
+        fn responding(response: Vec<u8>) -> Self {
+            Self {
+                thread_id: 1,
+                window: Some(1),
+                response,
+                create_error: None,
+                write_error: None,
+                send_error: None,
+                send_result: true,
+                truncate_read_at: None,
+                read_count: 0,
+                mapping_name: None,
+                descriptor: None,
+                request: Vec::new(),
+            }
+        }
+    }
+
+    impl PageantWmCopyDataBackend for FakePageantBackend {
+        type Window = u8;
+        type Mapping = FakePageantMapping;
+
+        fn current_thread_id(&self) -> u32 {
+            self.thread_id
+        }
+
+        fn find_pageant_window(
+            &mut self,
+            class_name: &str,
+            window_title: &str,
+        ) -> Result<Option<Self::Window>, AgentError> {
+            assert_eq!(class_name, PAGEANT_WM_COPYDATA_WINDOW_CLASS);
+            assert_eq!(window_title, PAGEANT_WM_COPYDATA_WINDOW_TITLE);
+            Ok(self.window)
+        }
+
+        fn create_mapping(
+            &mut self,
+            name: &[u8],
+            capacity: usize,
+        ) -> Result<Self::Mapping, AgentError> {
+            if let Some(error) = self.create_error.take() {
+                return Err(error);
+            }
+            assert_eq!(capacity, PAGEANT_WM_COPYDATA_MAX_MSGLEN);
+            validate_pageant_wm_copydata_mapping_name(name)?;
+            self.mapping_name = Some(name.to_vec());
+            Ok(FakePageantMapping { bytes: vec![0; capacity] })
+        }
+
+        fn write_mapping(
+            &mut self,
+            mapping: &mut Self::Mapping,
+            bytes: &[u8],
+        ) -> Result<(), AgentError> {
+            if let Some(error) = self.write_error.take() {
+                return Err(error);
+            }
+            mapping.bytes[..bytes.len()].copy_from_slice(bytes);
+            self.request = bytes.to_vec();
+            Ok(())
+        }
+
+        fn send_copydata(
+            &mut self,
+            _window: &Self::Window,
+            mapping: &mut Self::Mapping,
+            message: &PageantWmCopyData,
+        ) -> Result<bool, AgentError> {
+            if let Some(error) = self.send_error.take() {
+                return Err(error);
+            }
+            self.descriptor = Some(message.clone());
+            if self.send_result {
+                let response_len = self.response.len().min(mapping.bytes.len());
+                mapping.bytes[..response_len].copy_from_slice(&self.response[..response_len]);
+            }
+            Ok(self.send_result)
+        }
+
+        fn read_mapping(
+            &mut self,
+            mapping: &Self::Mapping,
+            offset: usize,
+            length: usize,
+        ) -> Result<Vec<u8>, AgentError> {
+            let end = offset.checked_add(length).ok_or(AgentError::FrameTooLarge)?;
+            if end > mapping.bytes.len() {
+                return Err(AgentError::Transport("mapping read outside capacity".into()));
+            }
+            self.read_count += 1;
+            let end = if self.truncate_read_at == Some(self.read_count) {
+                end.saturating_sub(1)
+            } else {
+                end
+            };
+            Ok(mapping.bytes[offset..end].to_vec())
+        }
+    }
+
     fn append_test_string(output: &mut Vec<u8>, value: &[u8]) {
         output.extend_from_slice(&(u32::try_from(value.len()).expect("test length")).to_be_bytes());
         output.extend_from_slice(value);
@@ -2136,6 +2504,172 @@ mod tests {
             (u32::try_from(MAX_AGENT_FRAME).expect("test limit") + 1).to_be_bytes().to_vec();
         let mut oversized = PageantAgentChannel::new(ScriptedStream::new(oversized, 1));
         assert_eq!(oversized.exchange(&request), Err(AgentError::FrameTooLarge));
+    }
+
+    #[test]
+    fn pageant_wm_copydata_descriptor_and_mapping_name_are_bounded() {
+        let name = pageant_wm_copydata_mapping_name(0x1234_abcd);
+        assert_eq!(name, b"PageantRequest1234abcd\0");
+        let descriptor = PageantWmCopyData::new(name.clone()).expect("descriptor");
+        assert_eq!(descriptor.dw_data(), PAGEANT_WM_COPYDATA_ID);
+        assert_eq!(descriptor.cb_data(), u32::try_from(name.len()).expect("name length"));
+        assert_eq!(descriptor.mapping_name(), name.as_slice());
+        let debug = format!("{descriptor:?}");
+        assert!(!debug.contains("PageantRequest"));
+        assert!(debug.contains("mapping_name_len"));
+
+        assert_eq!(
+            PageantWmCopyData::new(Vec::<u8>::new()),
+            Err(AgentError::InvalidPageantMappingName("empty name"))
+        );
+        assert_eq!(
+            PageantWmCopyData::new(b"PageantRequest\0suffix\0".to_vec()),
+            Err(AgentError::InvalidPageantMappingName("name contains an embedded NUL"))
+        );
+        assert_eq!(
+            PageantWmCopyData::new(b"PageantRequest\x80\0".to_vec()),
+            Err(AgentError::InvalidPageantMappingName("name is not ASCII"))
+        );
+        assert_eq!(
+            PageantWmCopyData::new(b"PageantRequest".to_vec()),
+            Err(AgentError::InvalidPageantMappingName("name is not NUL-terminated"))
+        );
+        assert_eq!(
+            PageantWmCopyData::new(vec![b'a'; PAGEANT_WM_COPYDATA_MAPPING_NAME_LEN + 1]),
+            Err(AgentError::InvalidPageantMappingName("name is too long"))
+        );
+        assert_eq!(
+            PageantWmCopyData::new(b"OtherxxRequest1234abcd\0".to_vec()),
+            Err(AgentError::InvalidPageantMappingName("name has the wrong prefix"))
+        );
+        assert_eq!(
+            PageantWmCopyData::new(b"PageantRequest1234abcd00\0".to_vec()),
+            Err(AgentError::InvalidPageantMappingName("name is too long"))
+        );
+        assert_eq!(
+            PageantWmCopyData::new(b"PageantRequest1234abcG\0".to_vec()),
+            Err(AgentError::InvalidPageantMappingName("invalid thread ID"))
+        );
+    }
+
+    #[test]
+    fn pageant_wm_copydata_channel_round_trips_standard_agent_frame() {
+        let response = AgentMessage::IdentitiesAnswer {
+            identities: vec![AgentIdentity::new(KEY, b"work key").expect("identity")],
+        }
+        .encode_frame()
+        .expect("response");
+        let mut backend = FakePageantBackend::responding(response);
+        backend.thread_id = 7;
+        let request = AgentMessage::RequestIdentities.encode_frame().expect("request");
+        let mut client = AgentClient::new(PageantWmCopyDataChannel::new(backend));
+
+        assert_eq!(client.identities().expect("identities").len(), 1);
+        let backend = client.into_inner().into_inner();
+        assert_eq!(backend.mapping_name, Some(b"PageantRequest00000007\0".to_vec()));
+        assert_eq!(backend.request, request);
+        let descriptor = backend.descriptor.expect("descriptor");
+        assert_eq!(descriptor.dw_data(), PAGEANT_WM_COPYDATA_ID);
+        assert_eq!(descriptor.mapping_name(), b"PageantRequest00000007\0");
+    }
+
+    #[test]
+    fn pageant_wm_copydata_channel_fails_closed_for_discovery_and_mapping_errors() {
+        let request = AgentMessage::RequestIdentities.encode_frame().expect("request");
+
+        let mut missing = FakePageantBackend::responding(Vec::new());
+        missing.window = None;
+        let mut channel = PageantWmCopyDataChannel::new(missing);
+        assert_eq!(channel.exchange(&request), Err(AgentError::PageantWindowNotFound));
+
+        let mut create = FakePageantBackend::responding(Vec::new());
+        create.create_error = Some(AgentError::Transport("create failed".into()));
+        let mut channel = PageantWmCopyDataChannel::new(create);
+        assert_eq!(channel.exchange(&request), Err(AgentError::Transport("create failed".into())));
+
+        let mut write = FakePageantBackend::responding(Vec::new());
+        write.write_error = Some(AgentError::Transport("write failed".into()));
+        let mut channel = PageantWmCopyDataChannel::new(write);
+        assert_eq!(channel.exchange(&request), Err(AgentError::Transport("write failed".into())));
+
+        let mut send = FakePageantBackend::responding(Vec::new());
+        send.send_result = false;
+        let mut channel = PageantWmCopyDataChannel::new(send);
+        assert_eq!(channel.exchange(&request), Err(AgentError::PageantMessageRejected));
+
+        let mut send_error = FakePageantBackend::responding(Vec::new());
+        send_error.send_error = Some(AgentError::Transport("send failed".into()));
+        let mut channel = PageantWmCopyDataChannel::new(send_error);
+        assert_eq!(channel.exchange(&request), Err(AgentError::Transport("send failed".into())));
+    }
+
+    #[test]
+    fn pageant_wm_copydata_channel_rejects_oversized_and_malformed_responses() {
+        let request = AgentMessage::RequestIdentities.encode_frame().expect("request");
+
+        let mut empty = PageantWmCopyDataChannel::new(FakePageantBackend::responding(vec![0; 4]));
+        assert_eq!(
+            empty.exchange(&request),
+            Err(AgentError::MalformedPageantResponse("empty agent payload"))
+        );
+
+        let oversized_payload = PAGEANT_WM_COPYDATA_MAX_MSGLEN - 3;
+        let mut oversized_bytes = Vec::with_capacity(4 + oversized_payload);
+        oversized_bytes.extend_from_slice(
+            &u32::try_from(oversized_payload).expect("payload length").to_be_bytes(),
+        );
+        oversized_bytes.resize(4 + oversized_payload, 0);
+        let mut oversized =
+            PageantWmCopyDataChannel::new(FakePageantBackend::responding(oversized_bytes));
+        assert_eq!(oversized.exchange(&request), Err(AgentError::FrameTooLarge));
+
+        let malformed_response = vec![0, 0, 0, 1, 99];
+        let mut malformed =
+            PageantWmCopyDataChannel::new(FakePageantBackend::responding(malformed_response));
+        assert_eq!(malformed.exchange(&request), Err(AgentError::UnsupportedMessage(99)));
+
+        let mut truncated_header = FakePageantBackend::responding(vec![0; 3]);
+        truncated_header.truncate_read_at = Some(1);
+        let mut truncated_header = PageantWmCopyDataChannel::new(truncated_header);
+        assert_eq!(
+            truncated_header.exchange(&request),
+            Err(AgentError::MalformedPageantResponse("truncated length field"))
+        );
+
+        let valid_header = AgentMessage::RequestIdentities.encode_frame().expect("request");
+        let mut truncated_frame = FakePageantBackend::responding(valid_header);
+        truncated_frame.truncate_read_at = Some(2);
+        let mut truncated_frame = PageantWmCopyDataChannel::new(truncated_frame);
+        assert_eq!(
+            truncated_frame.exchange(&request),
+            Err(AgentError::MalformedPageantResponse("truncated agent frame"))
+        );
+    }
+
+    #[test]
+    fn pageant_wm_copydata_channel_never_writes_oversized_requests() {
+        let mut channel = PageantWmCopyDataChannel::new(FakePageantBackend::responding(Vec::new()));
+        assert_eq!(
+            channel.exchange(&[0, 0, 0, 0]),
+            Err(AgentError::MalformedFrame("empty agent payload"))
+        );
+        assert!(channel.into_inner().request.is_empty());
+
+        let mut channel = PageantWmCopyDataChannel::new(FakePageantBackend::responding(Vec::new()));
+        let mut request = AgentMessage::RequestIdentities.encode_frame().expect("request");
+        request.resize(PAGEANT_WM_COPYDATA_MAX_MSGLEN + 1, 0);
+        assert_eq!(channel.exchange(&request), Err(AgentError::FrameTooLarge));
+        assert!(channel.into_inner().request.is_empty());
+
+        let mut identities =
+            vec![AgentIdentity::new(b"k", vec![b'a'; 4096]).expect("identity"); 63];
+        identities.push(AgentIdentity::new(b"k", vec![b'a'; 3512]).expect("identity"));
+        let request = AgentMessage::IdentitiesAnswer { identities }.encode_frame().expect("frame");
+        assert_eq!(request.len(), PAGEANT_WM_COPYDATA_MAX_MSGLEN + 1);
+        assert!(AgentMessage::decode_frame(&request).is_ok());
+        let mut channel = PageantWmCopyDataChannel::new(FakePageantBackend::responding(Vec::new()));
+        assert_eq!(channel.exchange(&request), Err(AgentError::FrameTooLarge));
+        assert!(channel.into_inner().request.is_empty());
     }
 
     #[test]
