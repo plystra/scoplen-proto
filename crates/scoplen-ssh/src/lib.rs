@@ -25,9 +25,9 @@ pub use agent::{
     AGENT_SIGN_FLAG_RSA_SHA2_256, AGENT_SIGN_FLAG_RSA_SHA2_512, AgentChannel, AgentClient,
     AgentConstraint, AgentError, AgentForwardingAuthorizer, AgentForwardingPolicy, AgentIdentity,
     AgentKeyStore, AgentMessage, AgentPrivateKey, AgentServer, FramedAgentChannel,
-    MAX_AGENT_COMMENT, MAX_AGENT_CONSTRAINTS, MAX_AGENT_EXTENSION_DETAILS,
-    MAX_AGENT_EXTENSION_NAME, MAX_AGENT_FRAME, MAX_AGENT_IDENTITIES, MAX_AGENT_KEY_BLOB,
-    MAX_AGENT_PRIVATE_KEY, MAX_AGENT_SIGN_DATA,
+    MAX_AGENT_COMMENT, MAX_AGENT_CONSTRAINTS, MAX_AGENT_EXTENSION_DATA,
+    MAX_AGENT_EXTENSION_DETAILS, MAX_AGENT_EXTENSION_NAME, MAX_AGENT_FRAME, MAX_AGENT_IDENTITIES,
+    MAX_AGENT_KEY_BLOB, MAX_AGENT_PRIVATE_KEY, MAX_AGENT_SIGN_DATA,
 };
 pub use authentication::{
     AuthMethodError, CertificateKind, CertificateValidationError, CertificateValidationPolicy,
