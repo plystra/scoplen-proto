@@ -61,6 +61,7 @@ pub use channels::{
 pub use policy::{AlgorithmCategory, AlgorithmPolicyError, HostAlgorithmPolicy};
 pub use russh_adapter::{
     ChannelEvent, ClientChannel, ClientConfig, ClientConnection, ClientError, HostKeyPolicy,
+    PublicKeyAuthError,
 };
 pub use security_key::{
     SecurityKeyAlgorithm, SecurityKeyAuthRequest, SecurityKeyError, SecurityKeyProvider,
