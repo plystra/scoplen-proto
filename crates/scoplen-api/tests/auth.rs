@@ -10,7 +10,7 @@ use uuid::Uuid;
 fn published_auth_vectors_round_trip_with_canonical_json() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors/api-auth.json");
     let document = VectorDocument::from_path(path).expect("auth vectors");
-    assert_eq!(document.vectors.len(), 3);
+    assert_eq!(document.vectors.len(), 4);
     for vector in document.vectors {
         let actual = match vector.kind.as_str() {
             "auth.challenge.response" => AuthChallengeResponse::from_json(&vector.input)
@@ -66,6 +66,18 @@ fn auth_public_types_enforce_failure_paths() {
         "{\"access_token\":\"a\",\"token_type\":\"DPoP\",\"expires_in\":600,\"refresh_token\":\"r\",\"refresh_expires_in\":2592000,\"extra\":true}"
     )
     .is_ok());
+    assert!(AuthTokenResponse::from_json(
+        "{\"access_token\":\"a\",\"token_type\":\"DPoP\",\"expires_in\":1,\"refresh_token\":\"r\",\"refresh_expires_in\":2}"
+    )
+    .is_ok());
+    assert!(AuthTokenResponse::from_json(
+        "{\"access_token\":\"a\",\"token_type\":\"DPoP\",\"expires_in\":0,\"refresh_token\":\"r\",\"refresh_expires_in\":1}"
+    )
+    .is_err());
+    assert!(AuthTokenResponse::from_json(
+        "{\"access_token\":\"a\",\"token_type\":\"DPoP\",\"expires_in\":1,\"refresh_token\":\"r\",\"refresh_expires_in\":0}"
+    )
+    .is_err());
     assert!(AuthTokenResponse::from_json(&format!(
         "{{\"access_token\":\"a\",\"token_type\":\"DPoP\",\"expires_in\":{ACCESS_TOKEN_EXPIRES_IN},\"refresh_token\":\"r\",\"refresh_expires_in\":{REFRESH_TOKEN_EXPIRES_IN}}}"
     ))

@@ -219,16 +219,16 @@ pub struct AuthTokenResponse {
     pub access_token: String,
     /// Always the literal `DPoP` token type.
     pub token_type: String,
-    /// Access-token lifetime, fixed at 600 seconds.
+    /// Access-token lifetime in seconds.
     pub expires_in: u64,
     /// Opaque DPoP-bound refresh token.
     pub refresh_token: String,
-    /// Refresh-token lifetime, fixed at 30 days.
+    /// Refresh-token lifetime in seconds.
     pub refresh_expires_in: u64,
 }
 
 impl AuthTokenResponse {
-    /// Construct a token response using the contract's fixed lifetimes.
+    /// Construct a token response using the contract's default lifetimes.
     ///
     /// # Errors
     ///
@@ -252,8 +252,8 @@ impl AuthTokenResponse {
     ///
     /// # Errors
     ///
-    /// Returns an error when a token is empty, the token type is not `DPoP`, or a lifetime does
-    /// not match the fixed K-3 value.
+    /// Returns an error when a token is empty, the token type is not `DPoP`, or a lifetime is not
+    /// a positive integer.
     pub fn validate(&self) -> Result<(), AuthCodecError> {
         if self.access_token.is_empty() || self.refresh_token.is_empty() {
             return Err(AuthCodecError::Invalid("tokens must not be empty".into()));
@@ -261,15 +261,13 @@ impl AuthTokenResponse {
         if self.token_type != "DPoP" {
             return Err(AuthCodecError::Invalid("token_type must be DPoP".into()));
         }
-        if self.expires_in != ACCESS_TOKEN_EXPIRES_IN {
-            return Err(AuthCodecError::Invalid(format!(
-                "expires_in must be {ACCESS_TOKEN_EXPIRES_IN}"
-            )));
+        if self.expires_in == 0 {
+            return Err(AuthCodecError::Invalid("expires_in must be a positive integer".into()));
         }
-        if self.refresh_expires_in != REFRESH_TOKEN_EXPIRES_IN {
-            return Err(AuthCodecError::Invalid(format!(
-                "refresh_expires_in must be {REFRESH_TOKEN_EXPIRES_IN}"
-            )));
+        if self.refresh_expires_in == 0 {
+            return Err(AuthCodecError::Invalid(
+                "refresh_expires_in must be a positive integer".into(),
+            ));
         }
         Ok(())
     }
@@ -469,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn token_response_uses_fixed_lifetimes_and_tolerates_extensions() {
+    fn token_response_uses_default_lifetimes_and_tolerates_extensions() {
         let response = AuthTokenResponse::new("access", "refresh").expect("valid");
         let json = response.to_json().expect("json");
         assert_eq!(
@@ -484,10 +482,32 @@ mod tests {
             response
         );
         assert!(AuthTokenResponse::from_json(&json.replace("\"DPoP\"", "\"Bearer\"")).is_err());
-        assert!(AuthTokenResponse::from_json(&json.replace("600", "601")).is_err());
         assert!(AuthTokenResponse::from_json(&json.replace("access", "")).is_err());
         assert!(AuthTokenResponse::from_json(
             "{\"access_token\":\"access\",\"token_type\":\"DPoP\",\"expires_in\":600,\"refresh_token\":\"refresh\"}"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn token_response_accepts_any_positive_lifetimes_and_rejects_zero() {
+        let response = AuthTokenResponse::from_json(
+            "{\"access_token\":\"access\",\"token_type\":\"DPoP\",\"expires_in\":1,\"refresh_token\":\"refresh\",\"refresh_expires_in\":18446744073709551615}",
+        )
+        .expect("positive lifetimes");
+        assert_eq!(response.expires_in, 1);
+        assert_eq!(response.refresh_expires_in, u64::MAX);
+        assert_eq!(
+            response.to_json().expect("encode"),
+            "{\"access_token\":\"access\",\"token_type\":\"DPoP\",\"expires_in\":1,\"refresh_token\":\"refresh\",\"refresh_expires_in\":18446744073709551615}"
+        );
+
+        assert!(AuthTokenResponse::from_json(
+            "{\"access_token\":\"access\",\"token_type\":\"DPoP\",\"expires_in\":0,\"refresh_token\":\"refresh\",\"refresh_expires_in\":1}"
+        )
+        .is_err());
+        assert!(AuthTokenResponse::from_json(
+            "{\"access_token\":\"access\",\"token_type\":\"DPoP\",\"expires_in\":1,\"refresh_token\":\"refresh\",\"refresh_expires_in\":0}"
         )
         .is_err());
     }
