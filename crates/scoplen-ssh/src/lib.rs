@@ -20,8 +20,6 @@ mod transport;
 
 #[cfg(unix)]
 pub use agent::connect_unix_agent;
-#[cfg(windows)]
-pub use agent::connect_windows_agent;
 pub use agent::{
     AGENT_SIGN_FLAG_RSA_SHA2_256, AGENT_SIGN_FLAG_RSA_SHA2_512, AgentChannel, AgentClient,
     AgentConstraint, AgentError, AgentForwardingAdapter, AgentForwardingAuthorizer,
@@ -29,8 +27,10 @@ pub use agent::{
     AgentServer, FramedAgentChannel, MAX_AGENT_COMMENT, MAX_AGENT_CONSTRAINTS,
     MAX_AGENT_EXTENSION_DATA, MAX_AGENT_EXTENSION_DETAILS, MAX_AGENT_EXTENSION_NAME,
     MAX_AGENT_FORWARD_BUFFER, MAX_AGENT_FORWARD_RESPONSES, MAX_AGENT_FRAME, MAX_AGENT_IDENTITIES,
-    MAX_AGENT_KEY_BLOB, MAX_AGENT_PRIVATE_KEY, MAX_AGENT_SIGN_DATA,
+    MAX_AGENT_KEY_BLOB, MAX_AGENT_PRIVATE_KEY, MAX_AGENT_SIGN_DATA, PageantAgentChannel,
 };
+#[cfg(windows)]
+pub use agent::{connect_pageant_agent, connect_windows_agent};
 pub use authentication::{
     AuthMethodError, CertificateKind, CertificateValidationError, CertificateValidationPolicy,
     Ed25519SshSigner, HostKey, HostKeyVerificationError, HostKeyVerifier,
