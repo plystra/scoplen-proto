@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Shared SSH protocol core for Scoplen clients and gateways.
 //!
-//! The algorithm policy, direct byte transport boundary, engine-independent authentication and
-//! channel boundaries, security-key wire support, and bounded proxy composition for K-7. The
-//! concrete SSH handshake engine, channel scheduling, and SFTP transfer engine remain separate so
-//! callers do not depend on a particular engine.
+//! This crate provides the algorithm policy, direct byte transport boundary, engine-independent
+//! authentication and channel boundaries, security-key wire support, and bounded proxy composition
+//! for K-7. The concrete SSH handshake engine, channel scheduling, and SFTP transfer engine remain
+//! separate so callers do not depend on a particular engine.
 
 #![forbid(unsafe_code)]
 
