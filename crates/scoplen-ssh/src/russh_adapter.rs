@@ -31,8 +31,9 @@ use zeroize::Zeroize;
 
 use crate::{
     CertificateValidationPolicy, ExtendedDataType, HostKeyVerificationError, HostKeyVerifier,
-    MAX_CHANNEL_TEXT, PtyRequest, PublicKeyAuthContext, PublicKeyAuthRequest, PublicKeyIdentity,
-    SignatureAlgorithm, Signer, SignerError, WindowChangeRequest, verify_host_key,
+    MAX_CHANNEL_ADDRESS, MAX_CHANNEL_TEXT, PtyRequest, PublicKeyAuthContext, PublicKeyAuthRequest,
+    PublicKeyIdentity, SignatureAlgorithm, Signer, SignerError, WindowChangeRequest,
+    verify_host_key,
 };
 
 const MAX_CLIENT_HOST: usize = 4096;
@@ -519,6 +520,21 @@ impl ClientConnection {
                 originator_address.to_owned(),
                 originator_port,
             )
+            .await
+            .map(|channel| ClientChannel::new(channel, permit))
+            .map_err(ClientError::from)
+    }
+
+    /// Open an RFC 4254 `direct-streamlocal@openssh.com` channel through this connection.
+    pub async fn open_direct_streamlocal(
+        &self,
+        socket_path: &str,
+    ) -> Result<ClientChannel, ClientError> {
+        validate_text(socket_path.as_bytes(), MAX_CHANNEL_ADDRESS, "socket path", true)
+            .map_err(ClientError::Config)?;
+        let permit = self.channel_permit()?;
+        self.handle
+            .channel_open_direct_streamlocal(socket_path.to_owned())
             .await
             .map(|channel| ClientChannel::new(channel, permit))
             .map_err(ClientError::from)
@@ -1132,6 +1148,52 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct DirectStreamlocalServer {
+        paths: mpsc::Sender<String>,
+    }
+
+    impl russh::server::Handler for DirectStreamlocalServer {
+        type Error = russh::Error;
+
+        async fn auth_password(
+            &mut self,
+            _user: &str,
+            _password: &str,
+        ) -> Result<russh::server::Auth, Self::Error> {
+            Ok(russh::server::Auth::Accept)
+        }
+
+        async fn channel_open_direct_streamlocal(
+            &mut self,
+            mut channel: russh::Channel<russh::server::Msg>,
+            socket_path: &str,
+            reply: russh::server::ChannelOpenHandle,
+            _session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            let _ = self.paths.send(socket_path.to_owned()).await;
+            reply.accept().await;
+            tokio::spawn(async move {
+                while let Some(message) = channel.wait().await {
+                    match message {
+                        russh::ChannelMsg::Data { data } => {
+                            if channel.data_bytes(data).await.is_err() {
+                                break;
+                            }
+                        }
+                        russh::ChannelMsg::Eof => {
+                            let _ = channel.eof().await;
+                            break;
+                        }
+                        russh::ChannelMsg::Close => break,
+                        _ => {}
+                    }
+                }
+            });
+            Ok(())
+        }
+    }
+
     #[test]
     fn config_rejects_empty_host_and_zero_port() {
         let verifier = |_host: &str, _key: &HostKey| Ok(());
@@ -1309,6 +1371,54 @@ mod tests {
     async fn agent_forward_request_surfaces_server_success_and_failure() {
         assert_eq!(agent_forward_request_case(true).await, ChannelEvent::Success);
         assert_eq!(agent_forward_request_case(false).await, ChannelEvent::Failure);
+    }
+
+    #[tokio::test]
+    async fn direct_streamlocal_channel_round_trips_bounded_path_and_data() {
+        let (paths, mut received) = mpsc::channel(1);
+        let mut server_config = russh::server::Config::default();
+        server_config.keys.push(
+            PrivateKey::random(
+                &mut ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng),
+                Algorithm::Ed25519,
+            )
+            .expect("server key"),
+        );
+        let server_config = Arc::new(server_config);
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind server");
+        let address = listener.local_addr().expect("server address");
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept client");
+            let _ =
+                russh::server::run_stream(server_config, stream, DirectStreamlocalServer { paths })
+                    .await;
+        });
+
+        let verifier = |_host: &str, _key: &HostKey| Ok(());
+        let config = ClientConfig::new("127.0.0.1", address.port(), verifier).expect("config");
+        let mut connection = ClientConnection::connect(config).await.expect("connect client");
+        connection.authenticate_password("user", b"password").await.expect("authenticate client");
+        let mut channel = connection
+            .open_direct_streamlocal("/run/scoplen.sock")
+            .await
+            .expect("open direct streamlocal");
+        assert_eq!(
+            timeout(Duration::from_secs(5), received.recv())
+                .await
+                .expect("streamlocal open callback")
+                .expect("streamlocal path"),
+            "/run/scoplen.sock"
+        );
+        channel.send_data(b"streamlocal payload").await.expect("send streamlocal data");
+        assert!(matches!(
+            timeout(Duration::from_secs(5), channel.next_event())
+                .await
+                .expect("streamlocal response")
+                .expect("streamlocal response result"),
+            Some(ChannelEvent::Data(bytes)) if bytes == b"streamlocal payload"
+        ));
+        channel.close().await.expect("close streamlocal channel");
+        connection.disconnect().await.expect("disconnect client");
     }
 
     #[tokio::test]
