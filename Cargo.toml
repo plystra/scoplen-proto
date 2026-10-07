@@ -27,3 +27,8 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 all = "warn"
 pedantic = "warn"
+
+[patch.crates-io]
+# pageant 0.2.2 is the last russh-compatible release, but its published source uses let-chains
+# while declaring Rust 1.85 support. Keep the tiny MSRV fix local until upstream publishes it.
+pageant = { path = "vendor/pageant" }
