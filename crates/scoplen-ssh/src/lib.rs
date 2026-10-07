@@ -25,10 +25,12 @@ pub use agent::{
     AGENT_SIGN_FLAG_RSA_SHA2_256, AGENT_SIGN_FLAG_RSA_SHA2_512, AgentChannel, AgentClient,
     AgentConstraint, AgentError, AgentForwardingAdapter, AgentForwardingAuthorizer,
     AgentForwardingPolicy, AgentIdentity, AgentKeyStore, AgentMessage, AgentPrivateKey,
-    AgentServer, FramedAgentChannel, MAX_AGENT_COMMENT, MAX_AGENT_CONSTRAINTS,
-    MAX_AGENT_EXTENSION_DATA, MAX_AGENT_EXTENSION_DETAILS, MAX_AGENT_EXTENSION_NAME,
-    MAX_AGENT_FORWARD_BUFFER, MAX_AGENT_FORWARD_RESPONSES, MAX_AGENT_FRAME, MAX_AGENT_IDENTITIES,
-    MAX_AGENT_KEY_BLOB, MAX_AGENT_PRIVATE_KEY, MAX_AGENT_SIGN_DATA, PageantAgentChannel,
+    AgentServer, AuthAgentChannel, AuthAgentChannelError, AuthAgentChannelState,
+    FramedAgentChannel, MAX_AGENT_COMMENT, MAX_AGENT_CONSTRAINTS, MAX_AGENT_EXTENSION_DATA,
+    MAX_AGENT_EXTENSION_DETAILS, MAX_AGENT_EXTENSION_NAME, MAX_AGENT_FORWARD_BUFFER,
+    MAX_AGENT_FORWARD_RESPONSES, MAX_AGENT_FRAME, MAX_AGENT_IDENTITIES, MAX_AGENT_KEY_BLOB,
+    MAX_AGENT_PRIVATE_KEY, MAX_AGENT_SIGN_DATA, MAX_AUTH_AGENT_CHANNEL_PACKET,
+    MAX_AUTH_AGENT_CHANNEL_WINDOW, PageantAgentChannel,
 };
 #[cfg(windows)]
 pub use agent::{connect_pageant_agent, connect_windows_agent};

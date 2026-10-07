@@ -3,7 +3,9 @@
 //!
 //! The platform-specific socket, named-pipe, and Pageant adapters implement [`AgentChannel`].
 //! This module owns the OpenSSH agent framing and the request/response boundary so every adapter
-//! applies the same length, ordering, and failure rules.
+//! applies the same length, ordering, and failure rules. [`AuthAgentChannel`] composes those
+//! rules with the engine-independent RFC 4254 `auth-agent@openssh.com` channel lifecycle; a
+//! concrete SSH engine still owns channel allocation, scheduling, and window updates.
 
 #![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 
@@ -12,7 +14,10 @@ use std::{
     io::{Read, Write},
 };
 
-use crate::channels::{ChannelData, MAX_CHANNEL_STRING};
+use crate::channels::{
+    ChannelClose, ChannelCodecError, ChannelData, ChannelEof, ChannelOpen, ChannelOpenConfirmation,
+    ChannelOpenType, MAX_CHANNEL_STRING,
+};
 use scoplen_crypto::SecretVec;
 use thiserror::Error;
 
@@ -66,6 +71,12 @@ pub const MAX_AGENT_EXTENSION_DATA: usize = 192 * 1024;
 pub const MAX_AGENT_FORWARD_BUFFER: usize = MAX_AGENT_FRAME + 4;
 /// Maximum complete agent responses produced for one channel-data delivery.
 pub const MAX_AGENT_FORWARD_RESPONSES: usize = 64;
+/// Maximum receive window advertised by the bounded auth-agent channel adapter.
+#[allow(clippy::cast_possible_truncation)]
+pub const MAX_AUTH_AGENT_CHANNEL_WINDOW: u32 = MAX_AGENT_FORWARD_BUFFER as u32;
+/// Maximum SSH packet size advertised by the bounded auth-agent channel adapter.
+#[allow(clippy::cast_possible_truncation)]
+pub const MAX_AUTH_AGENT_CHANNEL_PACKET: u32 = (MAX_CHANNEL_STRING + 9) as u32;
 /// OpenSSH requests an RSA SHA-256 signature when this flag is set.
 pub const AGENT_SIGN_FLAG_RSA_SHA2_256: u32 = 2;
 /// OpenSSH requests an RSA SHA-512 signature when this flag is set.
@@ -104,6 +115,9 @@ pub enum AgentError {
     /// One channel-data delivery contained more complete agent requests than allowed.
     #[error("SSH forwarded agent response limit exceeded")]
     ForwardingResponseLimit,
+    /// The response fragment size requested by a channel adapter was invalid.
+    #[error("SSH forwarded agent response data limit is invalid")]
+    ForwardingResponseDataLimitInvalid,
     /// The forwarded agent channel closed while a frame was still being reassembled.
     #[error("SSH forwarded agent channel closed with a truncated frame")]
     ForwardingTruncated,
@@ -973,6 +987,7 @@ pub struct AgentForwardingAdapter<S, A> {
     server: AgentServer<S>,
     policy: AgentForwardingPolicy<A>,
     response_channel: u32,
+    response_data_limit: usize,
     buffer: Vec<u8>,
     closed: bool,
 }
@@ -985,10 +1000,35 @@ impl<S: AgentKeyStore, A: AgentForwardingAuthorizer> AgentForwardingAdapter<S, A
         policy: AgentForwardingPolicy<A>,
         response_channel: u32,
     ) -> Self {
+        Self::from_parts(server, policy, response_channel, MAX_CHANNEL_STRING)
+    }
+
+    /// Construct an adapter with a peer-specific maximum channel-data payload.
+    ///
+    /// The limit is derived from the peer's advertised SSH maximum packet size by
+    /// [`AuthAgentChannel::accept`]. It is kept separate from [`MAX_CHANNEL_STRING`] so a
+    /// channel with a small packet budget still receives valid, bounded fragments.
+    pub fn with_response_data_limit(
+        server: AgentServer<S>,
+        policy: AgentForwardingPolicy<A>,
+        response_channel: u32,
+        response_data_limit: usize,
+    ) -> Result<Self, AgentError> {
+        validate_response_data_limit(response_data_limit)?;
+        Ok(Self::from_parts(server, policy, response_channel, response_data_limit))
+    }
+
+    fn from_parts(
+        server: AgentServer<S>,
+        policy: AgentForwardingPolicy<A>,
+        response_channel: u32,
+        response_data_limit: usize,
+    ) -> Self {
         Self {
             server,
             policy,
             response_channel,
+            response_data_limit,
             buffer: Vec::with_capacity(MAX_AGENT_FORWARD_BUFFER.min(4096)),
             closed: false,
         }
@@ -1048,9 +1088,11 @@ impl<S: AgentKeyStore, A: AgentForwardingAuthorizer> AgentForwardingAdapter<S, A
                 let response = self.server.dispatch_forwarded(request, &self.policy);
                 let response =
                     response.encode_frame().or_else(|_| AgentMessage::Failure.encode_frame())?;
-                responses.extend(response.chunks(MAX_CHANNEL_STRING).map(|fragment| ChannelData {
-                    recipient_channel: self.response_channel,
-                    data: fragment.to_vec(),
+                responses.extend(response.chunks(self.response_data_limit).map(|fragment| {
+                    ChannelData {
+                        recipient_channel: self.response_channel,
+                        data: fragment.to_vec(),
+                    }
                 }));
                 response_count += 1;
                 continue;
@@ -1120,6 +1162,226 @@ impl<S: AgentKeyStore, A: AgentForwardingAuthorizer> AgentForwardingAdapter<S, A
     #[must_use]
     pub fn into_parts(self) -> (AgentServer<S>, AgentForwardingPolicy<A>) {
         (self.server, self.policy)
+    }
+}
+
+/// Errors raised while accepting and serving one SSH `auth-agent@openssh.com` channel.
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum AuthAgentChannelError {
+    /// The channel-open message was malformed or exceeded a channel codec limit.
+    #[error("invalid SSH auth-agent channel open: {0}")]
+    InvalidOpen(ChannelCodecError),
+    /// The peer requested a channel type other than `auth-agent@openssh.com`.
+    #[error("SSH channel is not an auth-agent channel")]
+    WrongChannelType,
+    /// The local receive window is zero or exceeds the bounded adapter buffer.
+    #[error("SSH auth-agent channel receive window is invalid")]
+    InvalidWindowSize,
+    /// The local maximum packet size cannot carry bounded channel data or exceeds the adapter cap.
+    #[error("SSH auth-agent channel maximum packet size is invalid")]
+    InvalidPacketSize,
+    /// The peer maximum packet size cannot carry even one channel-data byte.
+    #[error("SSH auth-agent peer maximum packet size is too small")]
+    PeerPacketTooSmall,
+    /// A channel message was addressed to a different channel number.
+    #[error("SSH auth-agent channel recipient mismatch: expected {expected}, got {actual}")]
+    RecipientMismatch { expected: u32, actual: u32 },
+    /// The channel has received EOF or close and cannot accept more data.
+    #[error("SSH auth-agent channel is closed")]
+    Closed,
+    /// The agent framing or forwarding policy rejected channel data.
+    #[error(transparent)]
+    Agent(AgentError),
+}
+
+/// Lifecycle state of an accepted SSH auth-agent channel.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthAgentChannelState {
+    /// Channel data may be received.
+    Open,
+    /// Peer EOF was received after a complete agent stream.
+    EofReceived,
+    /// Peer close or a protocol error ended the channel.
+    Closed,
+}
+
+/// Engine-independent composition of an SSH auth-agent channel and the bounded agent adapter.
+///
+/// The caller owns channel allocation and SSH window updates. This type accepts a validated
+/// `SSH_MSG_CHANNEL_OPEN`, returns the exact open confirmation fields to send, validates every
+/// incoming channel recipient and packet bound, and maps channel EOF/close to the agent stream's
+/// clean-close or truncated-frame result. It never owns a russh channel or invents an engine.
+pub struct AuthAgentChannel<S, A> {
+    adapter: AgentForwardingAdapter<S, A>,
+    confirmation: ChannelOpenConfirmation,
+    local_channel: u32,
+    state: AuthAgentChannelState,
+    inbound_data_limit: usize,
+}
+
+impl<S: AgentKeyStore, A: AgentForwardingAuthorizer> AuthAgentChannel<S, A> {
+    /// Accept an `auth-agent@openssh.com` open and create its bounded forwarding lifecycle.
+    ///
+    /// `local_channel` is the channel number allocated by the accepting engine. The returned
+    /// confirmation uses it as the sender channel and echoes `open.sender_channel` as its
+    /// recipient. The local window and maximum packet size are explicit because allocation and
+    /// SSH window policy belong to the engine caller; both are bounded by this adapter.
+    pub fn accept(
+        open: &ChannelOpen,
+        local_channel: u32,
+        initial_window_size: u32,
+        maximum_packet_size: u32,
+        server: AgentServer<S>,
+        policy: AgentForwardingPolicy<A>,
+    ) -> Result<Self, AuthAgentChannelError> {
+        open.encode().map_err(AuthAgentChannelError::InvalidOpen)?;
+        if !matches!(&open.channel_type, ChannelOpenType::AuthAgent) {
+            return Err(AuthAgentChannelError::WrongChannelType);
+        }
+        if initial_window_size == 0 || initial_window_size > MAX_AUTH_AGENT_CHANNEL_WINDOW {
+            return Err(AuthAgentChannelError::InvalidWindowSize);
+        }
+        let inbound_data_limit = channel_data_limit(maximum_packet_size)
+            .filter(|_| maximum_packet_size <= MAX_AUTH_AGENT_CHANNEL_PACKET)
+            .ok_or(AuthAgentChannelError::InvalidPacketSize)?;
+        let response_data_limit = channel_data_limit(open.maximum_packet_size)
+            .ok_or(AuthAgentChannelError::PeerPacketTooSmall)?;
+        let adapter = AgentForwardingAdapter::with_response_data_limit(
+            server,
+            policy,
+            open.sender_channel,
+            response_data_limit,
+        )
+        .map_err(AuthAgentChannelError::Agent)?;
+        Ok(Self {
+            adapter,
+            confirmation: ChannelOpenConfirmation {
+                recipient_channel: open.sender_channel,
+                sender_channel: local_channel,
+                initial_window_size,
+                maximum_packet_size,
+            },
+            local_channel,
+            state: AuthAgentChannelState::Open,
+            inbound_data_limit,
+        })
+    }
+
+    /// Return the open confirmation that the caller should send to the peer.
+    #[must_use]
+    pub fn confirmation(&self) -> ChannelOpenConfirmation {
+        self.confirmation.clone()
+    }
+
+    /// Return the local channel number used for incoming recipient fields.
+    #[must_use]
+    pub fn local_channel(&self) -> u32 {
+        self.local_channel
+    }
+
+    /// Return the current channel lifecycle state.
+    #[must_use]
+    pub fn state(&self) -> AuthAgentChannelState {
+        self.state
+    }
+
+    /// Deliver one decoded SSH channel-data message to the forwarded agent stream.
+    pub fn on_data(
+        &mut self,
+        message: &ChannelData,
+    ) -> Result<Vec<ChannelData>, AuthAgentChannelError> {
+        self.require_open()?;
+        self.check_recipient(message.recipient_channel)?;
+        if message.data.len() > self.inbound_data_limit {
+            self.state = AuthAgentChannelState::Closed;
+            return Err(AuthAgentChannelError::Agent(AgentError::FieldTooLarge(
+                "channel data packet",
+            )));
+        }
+        match self.adapter.push(&message.data) {
+            Ok(responses) => Ok(responses),
+            Err(error) => {
+                self.state = AuthAgentChannelState::Closed;
+                Err(AuthAgentChannelError::Agent(error))
+            }
+        }
+    }
+
+    /// Deliver peer EOF and distinguish a complete agent stream from a truncated frame.
+    pub fn on_eof(&mut self, message: &ChannelEof) -> Result<(), AuthAgentChannelError> {
+        self.require_open()?;
+        self.check_recipient(message.recipient_channel)?;
+        match self.adapter.finish() {
+            Ok(()) => {
+                self.state = AuthAgentChannelState::EofReceived;
+                Ok(())
+            }
+            Err(error) => {
+                self.state = AuthAgentChannelState::Closed;
+                Err(AuthAgentChannelError::Agent(error))
+            }
+        }
+    }
+
+    /// Deliver peer close and close cleanly when no agent frame is truncated.
+    pub fn on_close(&mut self, message: &ChannelClose) -> Result<(), AuthAgentChannelError> {
+        if self.state == AuthAgentChannelState::Closed {
+            return Err(AuthAgentChannelError::Closed);
+        }
+        self.check_recipient(message.recipient_channel)?;
+        if self.state == AuthAgentChannelState::EofReceived {
+            self.state = AuthAgentChannelState::Closed;
+            return Ok(());
+        }
+        match self.adapter.finish() {
+            Ok(()) => {
+                self.state = AuthAgentChannelState::Closed;
+                Ok(())
+            }
+            Err(error) => {
+                self.state = AuthAgentChannelState::Closed;
+                Err(AuthAgentChannelError::Agent(error))
+            }
+        }
+    }
+
+    /// Return the adapter after the channel has been closed.
+    #[must_use]
+    pub fn into_parts(self) -> (AgentForwardingAdapter<S, A>, ChannelOpenConfirmation) {
+        (self.adapter, self.confirmation)
+    }
+
+    fn require_open(&self) -> Result<(), AuthAgentChannelError> {
+        if self.state == AuthAgentChannelState::Open {
+            Ok(())
+        } else {
+            Err(AuthAgentChannelError::Closed)
+        }
+    }
+
+    fn check_recipient(&mut self, actual: u32) -> Result<(), AuthAgentChannelError> {
+        if actual == self.local_channel {
+            Ok(())
+        } else {
+            self.state = AuthAgentChannelState::Closed;
+            Err(AuthAgentChannelError::RecipientMismatch { expected: self.local_channel, actual })
+        }
+    }
+}
+
+fn channel_data_limit(maximum_packet_size: u32) -> Option<usize> {
+    usize::try_from(maximum_packet_size)
+        .ok()?
+        .checked_sub(9)
+        .filter(|limit| *limit > 0)
+        .map(|limit| limit.min(MAX_CHANNEL_STRING))
+}
+
+fn validate_response_data_limit(limit: usize) -> Result<(), AgentError> {
+    if limit == 0 || limit > MAX_CHANNEL_STRING {
+        Err(AgentError::ForwardingResponseDataLimitInvalid)
+    } else {
+        Ok(())
     }
 }
 
@@ -1722,6 +1984,29 @@ mod tests {
         )
     }
 
+    fn auth_agent_channel(
+        signature: Vec<u8>,
+        policy: AgentForwardingPolicy<Authorizer>,
+        peer_maximum_packet_size: u32,
+        local_maximum_packet_size: u32,
+    ) -> AuthAgentChannel<Store, Authorizer> {
+        let open =
+            ChannelOpen::new(ChannelOpenType::AuthAgent, 9, 64 * 1024, peer_maximum_packet_size)
+                .expect("auth-agent open");
+        AuthAgentChannel::accept(
+            &open,
+            4,
+            64 * 1024,
+            local_maximum_packet_size,
+            AgentServer::new(Store {
+                identity: AgentIdentity::new(KEY, b"work key").expect("identity"),
+                signature,
+            }),
+            policy,
+        )
+        .expect("auth-agent channel")
+    }
+
     fn decode_agent_frames(fragments: &[ChannelData]) -> Vec<AgentMessage> {
         let mut wire = Vec::new();
         for fragment in fragments {
@@ -2111,6 +2396,19 @@ mod tests {
         assert_eq!(oversized_adapter.push(&oversized), Err(AgentError::FrameTooLarge));
         assert!(oversized_adapter.is_closed());
 
+        assert!(matches!(
+            AgentForwardingAdapter::with_response_data_limit(
+                AgentServer::new(Store {
+                    identity: AgentIdentity::new(KEY, b"work key").expect("identity"),
+                    signature: b"signature".to_vec(),
+                }),
+                AgentForwardingPolicy::enabled(Authorizer { allowed: true }),
+                4,
+                0,
+            ),
+            Err(AgentError::ForwardingResponseDataLimitInvalid)
+        ));
+
         let request = AgentMessage::RequestIdentities.encode_frame().expect("request");
         let mut many = Vec::new();
         for _ in 0..=MAX_AGENT_FORWARD_RESPONSES {
@@ -2119,6 +2417,321 @@ mod tests {
         let mut limited = forwarding_adapter(b"signature".to_vec());
         assert_eq!(limited.push(&many), Err(AgentError::ForwardingResponseLimit));
         assert!(limited.is_closed());
+    }
+
+    #[test]
+    fn auth_agent_channel_accepts_open_reassembles_data_and_closes_cleanly() {
+        let open = ChannelOpen::new(
+            ChannelOpenType::AuthAgent,
+            9,
+            64 * 1024,
+            MAX_AUTH_AGENT_CHANNEL_PACKET,
+        )
+        .expect("open");
+        let mut channel = AuthAgentChannel::accept(
+            &open,
+            4,
+            MAX_AUTH_AGENT_CHANNEL_WINDOW,
+            MAX_AUTH_AGENT_CHANNEL_PACKET,
+            AgentServer::new(Store {
+                identity: AgentIdentity::new(KEY, b"work key").expect("identity"),
+                signature: b"signed payload".to_vec(),
+            }),
+            AgentForwardingPolicy::enabled(Authorizer { allowed: true }),
+        )
+        .expect("channel");
+        assert_eq!(
+            channel.confirmation(),
+            ChannelOpenConfirmation {
+                recipient_channel: 9,
+                sender_channel: 4,
+                initial_window_size: MAX_AUTH_AGENT_CHANNEL_WINDOW,
+                maximum_packet_size: MAX_AUTH_AGENT_CHANNEL_PACKET,
+            }
+        );
+        assert_eq!(channel.state(), AuthAgentChannelState::Open);
+
+        let mut wire = AgentMessage::RequestIdentities.encode_frame().expect("identities");
+        wire.extend_from_slice(
+            &AgentMessage::SignRequest {
+                key_blob: KEY.to_vec(),
+                data: b"payload".to_vec(),
+                flags: AGENT_SIGN_FLAG_RSA_SHA2_512,
+            }
+            .encode_frame()
+            .expect("sign"),
+        );
+        let mut responses = Vec::new();
+        for byte in wire {
+            responses.extend(
+                channel
+                    .on_data(&ChannelData { recipient_channel: 4, data: vec![byte] })
+                    .expect("channel data"),
+            );
+        }
+        assert_eq!(
+            decode_agent_frames(&responses),
+            vec![
+                AgentMessage::IdentitiesAnswer {
+                    identities: vec![AgentIdentity::new(KEY, b"work key").expect("identity")],
+                },
+                AgentMessage::SignResponse { signature: b"signed payload".to_vec() },
+            ]
+        );
+        channel.on_eof(&ChannelEof { recipient_channel: 4 }).expect("eof");
+        assert_eq!(channel.state(), AuthAgentChannelState::EofReceived);
+        channel.on_close(&ChannelClose { recipient_channel: 4 }).expect("close");
+        assert_eq!(channel.state(), AuthAgentChannelState::Closed);
+        assert_eq!(
+            channel.on_data(&ChannelData { recipient_channel: 4, data: Vec::new() }),
+            Err(AuthAgentChannelError::Closed)
+        );
+    }
+
+    #[test]
+    fn auth_agent_channel_maps_clean_close_without_eof_and_truncated_frames() {
+        let mut clean = auth_agent_channel(
+            b"signature".to_vec(),
+            AgentForwardingPolicy::enabled(Authorizer { allowed: true }),
+            MAX_AUTH_AGENT_CHANNEL_PACKET,
+            MAX_AUTH_AGENT_CHANNEL_PACKET,
+        );
+        clean.on_close(&ChannelClose { recipient_channel: 4 }).expect("clean close");
+        assert_eq!(clean.state(), AuthAgentChannelState::Closed);
+
+        let frame = AgentMessage::RequestIdentities.encode_frame().expect("request");
+        let mut truncated = auth_agent_channel(
+            b"signature".to_vec(),
+            AgentForwardingPolicy::enabled(Authorizer { allowed: true }),
+            MAX_AUTH_AGENT_CHANNEL_PACKET,
+            MAX_AUTH_AGENT_CHANNEL_PACKET,
+        );
+        truncated
+            .on_data(&ChannelData { recipient_channel: 4, data: frame[..frame.len() - 1].to_vec() })
+            .expect("partial data");
+        assert_eq!(
+            truncated.on_close(&ChannelClose { recipient_channel: 4 }),
+            Err(AuthAgentChannelError::Agent(AgentError::ForwardingTruncated))
+        );
+        assert_eq!(truncated.state(), AuthAgentChannelState::Closed);
+    }
+
+    #[test]
+    fn auth_agent_channel_rejects_malformed_oversized_and_misdirected_data() {
+        let open =
+            ChannelOpen::new(ChannelOpenType::Session, 9, 64 * 1024, 1024).expect("session open");
+        assert!(matches!(
+            AuthAgentChannel::accept(
+                &open,
+                4,
+                64 * 1024,
+                MAX_AUTH_AGENT_CHANNEL_PACKET,
+                AgentServer::new(Store {
+                    identity: AgentIdentity::new(KEY, b"work key").expect("identity"),
+                    signature: b"signature".to_vec(),
+                }),
+                AgentForwardingPolicy::enabled(Authorizer { allowed: true }),
+            ),
+            Err(AuthAgentChannelError::WrongChannelType)
+        ));
+
+        let mut misdirected = auth_agent_channel(
+            b"signature".to_vec(),
+            AgentForwardingPolicy::enabled(Authorizer { allowed: true }),
+            MAX_AUTH_AGENT_CHANNEL_PACKET,
+            MAX_AUTH_AGENT_CHANNEL_PACKET,
+        );
+        assert_eq!(misdirected.state(), AuthAgentChannelState::Open);
+        assert_eq!(
+            misdirected.on_data(&ChannelData { recipient_channel: 99, data: Vec::new() }),
+            Err(AuthAgentChannelError::RecipientMismatch { expected: 4, actual: 99 })
+        );
+        assert_eq!(misdirected.state(), AuthAgentChannelState::Closed);
+
+        let open =
+            ChannelOpen::new(ChannelOpenType::AuthAgent, 9, 64 * 1024, 9).expect("small open");
+        assert!(matches!(
+            AuthAgentChannel::accept(
+                &open,
+                4,
+                64 * 1024,
+                MAX_AUTH_AGENT_CHANNEL_PACKET,
+                AgentServer::new(Store {
+                    identity: AgentIdentity::new(KEY, b"work key").expect("identity"),
+                    signature: b"signature".to_vec(),
+                }),
+                AgentForwardingPolicy::enabled(Authorizer { allowed: true }),
+            ),
+            Err(AuthAgentChannelError::PeerPacketTooSmall)
+        ));
+
+        let mut malformed = auth_agent_channel(
+            b"signature".to_vec(),
+            AgentForwardingPolicy::enabled(Authorizer { allowed: true }),
+            MAX_AUTH_AGENT_CHANNEL_PACKET,
+            MAX_AUTH_AGENT_CHANNEL_PACKET,
+        );
+        assert_eq!(
+            malformed.on_data(&ChannelData { recipient_channel: 4, data: vec![0; 4] }),
+            Err(AuthAgentChannelError::Agent(AgentError::MalformedFrame("empty agent payload")))
+        );
+        assert_eq!(malformed.state(), AuthAgentChannelState::Closed);
+
+        let mut oversized = auth_agent_channel(
+            b"signature".to_vec(),
+            AgentForwardingPolicy::enabled(Authorizer { allowed: true }),
+            MAX_AUTH_AGENT_CHANNEL_PACKET,
+            20,
+        );
+        assert_eq!(
+            oversized.on_data(&ChannelData { recipient_channel: 4, data: vec![0; 12] }),
+            Err(AuthAgentChannelError::Agent(AgentError::FieldTooLarge("channel data packet")))
+        );
+        assert_eq!(oversized.state(), AuthAgentChannelState::Closed);
+    }
+
+    #[test]
+    fn auth_agent_channel_rejects_invalid_open_and_local_limits() {
+        let server = || {
+            AgentServer::new(Store {
+                identity: AgentIdentity::new(KEY, b"work key").expect("identity"),
+                signature: b"signature".to_vec(),
+            })
+        };
+        let policy = || AgentForwardingPolicy::enabled(Authorizer { allowed: true });
+
+        let malformed = ChannelOpen {
+            channel_type: ChannelOpenType::AuthAgent,
+            sender_channel: 9,
+            initial_window_size: 64 * 1024,
+            maximum_packet_size: 0,
+        };
+        assert!(matches!(
+            AuthAgentChannel::accept(
+                &malformed,
+                4,
+                64 * 1024,
+                MAX_AUTH_AGENT_CHANNEL_PACKET,
+                server(),
+                policy(),
+            ),
+            Err(AuthAgentChannelError::InvalidOpen(ChannelCodecError::InvalidValue(
+                "maximum packet size",
+            )))
+        ));
+
+        let open = ChannelOpen::new(
+            ChannelOpenType::AuthAgent,
+            9,
+            MAX_AUTH_AGENT_CHANNEL_WINDOW,
+            MAX_AUTH_AGENT_CHANNEL_PACKET,
+        )
+        .expect("open");
+        assert!(matches!(
+            AuthAgentChannel::accept(
+                &open,
+                4,
+                0,
+                MAX_AUTH_AGENT_CHANNEL_PACKET,
+                server(),
+                policy(),
+            ),
+            Err(AuthAgentChannelError::InvalidWindowSize)
+        ));
+        assert!(matches!(
+            AuthAgentChannel::accept(
+                &open,
+                4,
+                MAX_AUTH_AGENT_CHANNEL_WINDOW + 1,
+                MAX_AUTH_AGENT_CHANNEL_PACKET,
+                server(),
+                policy(),
+            ),
+            Err(AuthAgentChannelError::InvalidWindowSize)
+        ));
+        assert!(matches!(
+            AuthAgentChannel::accept(&open, 4, 64 * 1024, 9, server(), policy(),),
+            Err(AuthAgentChannelError::InvalidPacketSize)
+        ));
+        assert!(matches!(
+            AuthAgentChannel::accept(
+                &open,
+                4,
+                64 * 1024,
+                MAX_AUTH_AGENT_CHANNEL_PACKET + 1,
+                server(),
+                policy(),
+            ),
+            Err(AuthAgentChannelError::InvalidPacketSize)
+        ));
+
+        let mut channel = auth_agent_channel(
+            b"signature".to_vec(),
+            AgentForwardingPolicy::enabled(Authorizer { allowed: true }),
+            MAX_AUTH_AGENT_CHANNEL_PACKET,
+            MAX_AUTH_AGENT_CHANNEL_PACKET,
+        );
+        assert_eq!(
+            channel.on_eof(&ChannelEof { recipient_channel: 99 }),
+            Err(AuthAgentChannelError::RecipientMismatch { expected: 4, actual: 99 })
+        );
+        assert_eq!(channel.state(), AuthAgentChannelState::Closed);
+    }
+
+    #[test]
+    fn auth_agent_channel_rejects_forwarding_when_disabled_or_denied() {
+        let request = AgentMessage::SignRequest {
+            key_blob: KEY.to_vec(),
+            data: b"payload".to_vec(),
+            flags: 0,
+        }
+        .encode_frame()
+        .expect("request");
+        for policy in [
+            AgentForwardingPolicy::disabled(Authorizer { allowed: true }),
+            AgentForwardingPolicy::enabled(Authorizer { allowed: false }),
+        ] {
+            let mut channel = auth_agent_channel(
+                b"signature".to_vec(),
+                policy,
+                MAX_AUTH_AGENT_CHANNEL_PACKET,
+                MAX_AUTH_AGENT_CHANNEL_PACKET,
+            );
+            let responses = channel
+                .on_data(&ChannelData { recipient_channel: 4, data: request.clone() })
+                .expect("failure response");
+            assert_eq!(decode_agent_frames(&responses), [AgentMessage::Failure]);
+            channel.on_close(&ChannelClose { recipient_channel: 4 }).expect("close");
+        }
+    }
+
+    #[test]
+    fn auth_agent_channel_bounds_response_fragments_to_peer_packet() {
+        let mut channel = auth_agent_channel(
+            b"signature-that-needs-fragments".to_vec(),
+            AgentForwardingPolicy::enabled(Authorizer { allowed: true }),
+            14,
+            MAX_AUTH_AGENT_CHANNEL_PACKET,
+        );
+        let request = AgentMessage::SignRequest {
+            key_blob: KEY.to_vec(),
+            data: b"payload".to_vec(),
+            flags: 0,
+        }
+        .encode_frame()
+        .expect("request");
+        let responses = channel
+            .on_data(&ChannelData { recipient_channel: 4, data: request })
+            .expect("response");
+        assert!(!responses.is_empty());
+        assert!(responses.iter().all(|fragment| fragment.data.len() <= 5));
+        assert_eq!(
+            decode_agent_frames(&responses),
+            vec![AgentMessage::SignResponse {
+                signature: b"signature-that-needs-fragments".to_vec()
+            }]
+        );
+        channel.on_close(&ChannelClose { recipient_channel: 4 }).expect("close");
     }
 
     #[test]
