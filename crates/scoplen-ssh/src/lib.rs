@@ -85,7 +85,7 @@ pub use sftp::{
     MAX_SFTP_OUTSTANDING, MAX_SFTP_PACKET, MAX_SFTP_STRING, SftpAttributes, SftpClient, SftpError,
     SftpExtension, SftpLimits, SftpNameEntry, SftpPacket, SftpStatvfs,
 };
-pub use sftp_channel::{SftpChannel, SftpChannelError, SftpSession};
+pub use sftp_channel::{SftpChannel, SftpChannelError, SftpSession, SftpTransferProgress};
 pub use socks::{
     MAX_SOCKS_BUFFER, MAX_SOCKS_DOMAIN, MAX_SOCKS_USER_ID, SocksAddress, SocksBindAddress,
     SocksConnectRequest, SocksError, SocksHandshake, SocksProgress, SocksReply, SocksVersion,

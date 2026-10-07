@@ -86,5 +86,6 @@ responses, request-id correlation for bounded pipelining, and the OpenSSH `limit
 `posix-rename@openssh.com`, `statvfs@openssh.com`, `fstatvfs@openssh.com`, `hardlink@openssh.com`,
 `fsync@openssh.com`, `lsetstat@openssh.com`, `expand-path@openssh.com`, and `copy-data`
 requests and responses. `SftpChannel` composes the bounded v3 handshake and packet framing over
-an accepted SSH `session` channel; `SftpSession` layers bounded pipelining and request correlation
-on that channel, while transfer resume/progress and the interoperability matrix remain open.
+an accepted SSH `session` channel; `SftpSession` layers bounded pipelining, request correlation,
+resume-by-offset uploads/downloads, and progress callbacks on that channel, while the
+interoperability matrix remains open.
