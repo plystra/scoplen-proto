@@ -89,7 +89,8 @@ pub use socks_listener::{
     SocksListenerOperation, SocksOpenError,
 };
 pub use tcp::{
-    MAX_TCP_ADDRESSES, MAX_TCP_HOST, TcpTransport, Transport, TransportError, TransportOperation,
+    DEFAULT_TCP_FALLBACK_DELAY, MAX_TCP_ADDRESSES, MAX_TCP_HOST, TcpTransport, Transport,
+    TransportError, TransportOperation,
 };
 pub use transport::{
     EXT_INFO_CLIENT, EXT_INFO_SERVER, KeyExchangeFamily, NegotiatedTransport, STRICT_KEX_CLIENT,
