@@ -32,14 +32,15 @@ The agent boundary provides bounded request-identities and sign request/response
 transport-neutral client calls, and server dispatch that maps key-store errors to the opaque SSH
 agent failure response. `FramedAgentChannel` applies bounded read/write framing over a blocking
 stream, with platform constructors for Unix-domain sockets and Windows named pipes. Pageant
-compatibility and agent forwarding remain open; bounded remove-all, lock, and unlock requests are
-also dispatched with opaque failure mapping. The concrete SSH transport, remaining authentication
-methods, channels, SFTP, and interoperability work remain open. The agent server can consume
+compatibility and agent forwarding remain open; bounded remove-all, smart-card load and removal,
+lock, and unlock requests are also dispatched with opaque failure mapping. The concrete SSH
+transport, remaining authentication methods, channels, SFTP, and interoperability work remain open.
+The agent server can consume
 multiple bounded frames from a blocking stream through clean peer close while applying the same
 malformed and oversized-frame checks.
-The supported management surface includes exact-key removal in addition to remove-all, lock, and
-unlock; private-key add-identity and smart-card operations remain intentionally outside this
-opaque boundary until their algorithm-specific fields have a dedicated contract.
+The supported management surface includes exact-key removal, smart-card provider load and removal,
+remove-all, lock, and unlock; private-key add-identity remains intentionally outside this opaque
+boundary until its algorithm-specific fields have a dedicated contract.
 Agent message debug output reports only bounded lengths and non-sensitive metadata, so signing
 payloads and lock credentials are not emitted through ordinary diagnostics.
 Forwarded agent serving uses an explicit per-profile policy that is disabled by default and invokes

@@ -12,6 +12,7 @@ use std::{
     io::{Read, Write},
 };
 
+use scoplen_crypto::SecretVec;
 use thiserror::Error;
 
 const REQUEST_IDENTITIES: u8 = 11;
@@ -22,6 +23,8 @@ const FAILURE: u8 = 5;
 const SUCCESS: u8 = 6;
 const REMOVE_IDENTITY: u8 = 18;
 const REMOVE_ALL_IDENTITIES: u8 = 19;
+const ADD_SMARTCARD_KEY: u8 = 20;
+const REMOVE_SMARTCARD_KEY: u8 = 21;
 const LOCK: u8 = 22;
 const UNLOCK: u8 = 23;
 
@@ -37,6 +40,8 @@ pub const MAX_AGENT_COMMENT: usize = 4096;
 pub const MAX_AGENT_IDENTITIES: usize = 1024;
 /// Maximum lock or unlock passphrase length accepted by the agent boundary.
 pub const MAX_AGENT_PASSPHRASE: usize = 4096;
+/// Maximum provider name accepted by smart-card management requests.
+pub const MAX_AGENT_PROVIDER: usize = 4096;
 /// OpenSSH requests an RSA SHA-256 signature when this flag is set.
 pub const AGENT_SIGN_FLAG_RSA_SHA2_256: u32 = 2;
 /// OpenSSH requests an RSA SHA-512 signature when this flag is set.
@@ -117,6 +122,10 @@ pub enum AgentMessage {
     SignResponse { signature: Vec<u8> },
     /// Remove every identity currently held by the agent.
     RemoveAllIdentities,
+    /// Load keys from a smart-card provider.
+    AddSmartcardKey { provider: Vec<u8>, pin: SecretVec, flags: u32 },
+    /// Remove keys loaded from a smart-card provider.
+    RemoveSmartcardKey { provider: Vec<u8>, flags: u32 },
     /// Remove one identity matching an exact public-key blob.
     RemoveIdentity { key_blob: Vec<u8> },
     /// Lock the agent with a passphrase.
@@ -152,6 +161,17 @@ impl fmt::Debug for AgentMessage {
                 .field("key_blob_len", &key_blob.len())
                 .finish(),
             Self::RemoveAllIdentities => formatter.write_str("RemoveAllIdentities"),
+            Self::AddSmartcardKey { provider, pin, flags } => formatter
+                .debug_struct("AddSmartcardKey")
+                .field("provider_len", &provider.len())
+                .field("pin_len", &pin.len())
+                .field("flags", flags)
+                .finish(),
+            Self::RemoveSmartcardKey { provider, flags } => formatter
+                .debug_struct("RemoveSmartcardKey")
+                .field("provider_len", &provider.len())
+                .field("flags", flags)
+                .finish(),
             Self::Lock { passphrase } => {
                 formatter.debug_struct("Lock").field("passphrase_len", &passphrase.len()).finish()
             }
@@ -240,6 +260,25 @@ impl AgentMessage {
                 append_string(&mut payload, key_blob, MAX_AGENT_KEY_BLOB, "key blob")?;
             }
             Self::RemoveAllIdentities => payload.push(REMOVE_ALL_IDENTITIES),
+            Self::AddSmartcardKey { provider, pin, flags } => {
+                validate_blob(provider, MAX_AGENT_PROVIDER, "smart-card provider")?;
+                validate_size(pin.as_bytes(), MAX_AGENT_PASSPHRASE, "smart-card PIN")?;
+                payload.push(ADD_SMARTCARD_KEY);
+                append_string(&mut payload, provider, MAX_AGENT_PROVIDER, "smart-card provider")?;
+                append_string(
+                    &mut payload,
+                    pin.as_bytes(),
+                    MAX_AGENT_PASSPHRASE,
+                    "smart-card PIN",
+                )?;
+                payload.extend_from_slice(&flags.to_be_bytes());
+            }
+            Self::RemoveSmartcardKey { provider, flags } => {
+                validate_blob(provider, MAX_AGENT_PROVIDER, "smart-card provider")?;
+                payload.push(REMOVE_SMARTCARD_KEY);
+                append_string(&mut payload, provider, MAX_AGENT_PROVIDER, "smart-card provider")?;
+                payload.extend_from_slice(&flags.to_be_bytes());
+            }
             Self::Lock { passphrase } => {
                 validate_size(passphrase, MAX_AGENT_PASSPHRASE, "passphrase")?;
                 payload.push(LOCK);
@@ -428,6 +467,31 @@ impl<C: AgentChannel> AgentClient<C> {
         self.expect_success(&AgentMessage::RemoveAllIdentities)
     }
 
+    /// Load keys from a bounded smart-card provider.
+    pub fn add_smartcard_key(
+        &mut self,
+        provider: &[u8],
+        pin: &[u8],
+        flags: u32,
+    ) -> Result<(), AgentError> {
+        validate_blob(provider, MAX_AGENT_PROVIDER, "smart-card provider")?;
+        validate_size(pin, MAX_AGENT_PASSPHRASE, "smart-card PIN")?;
+        self.expect_success(&AgentMessage::AddSmartcardKey {
+            provider: provider.to_vec(),
+            pin: SecretVec::new(pin.to_vec()),
+            flags,
+        })
+    }
+
+    /// Remove keys loaded from a bounded smart-card provider.
+    pub fn remove_smartcard_key(&mut self, provider: &[u8], flags: u32) -> Result<(), AgentError> {
+        validate_blob(provider, MAX_AGENT_PROVIDER, "smart-card provider")?;
+        self.expect_success(&AgentMessage::RemoveSmartcardKey {
+            provider: provider.to_vec(),
+            flags,
+        })
+    }
+
     /// Remove one identity matching an exact public-key blob.
     pub fn remove_identity(&mut self, key_blob: &[u8]) -> Result<(), AgentError> {
         validate_blob(key_blob, MAX_AGENT_KEY_BLOB, "key blob")?;
@@ -494,6 +558,21 @@ pub trait AgentKeyStore {
     fn unlock(&self, _passphrase: &[u8]) -> Result<(), AgentError> {
         Err(AgentError::AgentFailure)
     }
+
+    /// Load keys from a smart-card provider.
+    fn add_smartcard_key(
+        &self,
+        _provider: &[u8],
+        _pin: &[u8],
+        _flags: u32,
+    ) -> Result<(), AgentError> {
+        Err(AgentError::AgentFailure)
+    }
+
+    /// Remove keys loaded from a smart-card provider.
+    fn remove_smartcard_key(&self, _provider: &[u8], _flags: u32) -> Result<(), AgentError> {
+        Err(AgentError::AgentFailure)
+    }
 }
 
 /// Server-side dispatch for forwarded or locally exposed agent requests.
@@ -525,6 +604,18 @@ impl<S: AgentKeyStore> AgentServer<S> {
                 Ok(()) => AgentMessage::Success,
                 Err(_) => AgentMessage::Failure,
             },
+            AgentMessage::AddSmartcardKey { provider, pin, flags } => {
+                match self.store.add_smartcard_key(&provider, pin.as_bytes(), flags) {
+                    Ok(()) => AgentMessage::Success,
+                    Err(_) => AgentMessage::Failure,
+                }
+            }
+            AgentMessage::RemoveSmartcardKey { provider, flags } => {
+                match self.store.remove_smartcard_key(&provider, flags) {
+                    Ok(()) => AgentMessage::Success,
+                    Err(_) => AgentMessage::Failure,
+                }
+            }
             AgentMessage::RemoveIdentity { key_blob } => {
                 match self.store.remove_identity(&key_blob) {
                     Ok(()) => AgentMessage::Success,
@@ -661,6 +752,8 @@ fn decode_payload(payload: &[u8]) -> Result<AgentMessage, AgentError> {
         }
         REMOVE_ALL_IDENTITIES if rest.is_empty() => Ok(AgentMessage::RemoveAllIdentities),
         REMOVE_ALL_IDENTITIES => Err(AgentError::MalformedFrame("remove all identities payload")),
+        ADD_SMARTCARD_KEY => decode_add_smartcard_key(rest),
+        REMOVE_SMARTCARD_KEY => decode_remove_smartcard_key(rest),
         LOCK => {
             let (passphrase, trailing) = read_string(rest, MAX_AGENT_PASSPHRASE, "passphrase")?;
             if !trailing.is_empty() {
@@ -681,6 +774,31 @@ fn decode_payload(payload: &[u8]) -> Result<AgentMessage, AgentError> {
         FAILURE => Err(AgentError::MalformedFrame("failure payload")),
         other => Err(AgentError::UnsupportedMessage(other)),
     }
+}
+
+fn decode_add_smartcard_key(rest: &[u8]) -> Result<AgentMessage, AgentError> {
+    let (provider, rest) = read_string(rest, MAX_AGENT_PROVIDER, "smart-card provider")?;
+    validate_blob(provider, MAX_AGENT_PROVIDER, "smart-card provider")?;
+    let (pin, rest) = read_string(rest, MAX_AGENT_PASSPHRASE, "smart-card PIN")?;
+    let flags = read_u32(rest, "smart-card flags")?;
+    if rest.len() != 4 {
+        return Err(AgentError::MalformedFrame("smart-card add trailing data"));
+    }
+    Ok(AgentMessage::AddSmartcardKey {
+        provider: provider.to_vec(),
+        pin: SecretVec::new(pin.to_vec()),
+        flags,
+    })
+}
+
+fn decode_remove_smartcard_key(rest: &[u8]) -> Result<AgentMessage, AgentError> {
+    let (provider, rest) = read_string(rest, MAX_AGENT_PROVIDER, "smart-card provider")?;
+    validate_blob(provider, MAX_AGENT_PROVIDER, "smart-card provider")?;
+    let flags = read_u32(rest, "smart-card flags")?;
+    if rest.len() != 4 {
+        return Err(AgentError::MalformedFrame("smart-card remove trailing data"));
+    }
+    Ok(AgentMessage::RemoveSmartcardKey { provider: provider.to_vec(), flags })
 }
 
 fn read_stream_frame<T: Read>(stream: &mut T) -> Result<Option<Vec<u8>>, AgentError> {
@@ -800,6 +918,27 @@ mod tests {
 
         fn unlock(&self, _passphrase: &[u8]) -> Result<(), AgentError> {
             Ok(())
+        }
+
+        fn add_smartcard_key(
+            &self,
+            provider: &[u8],
+            pin: &[u8],
+            flags: u32,
+        ) -> Result<(), AgentError> {
+            if provider == b"provider" && pin == b"pin" && flags == 7 {
+                Ok(())
+            } else {
+                Err(AgentError::AgentFailure)
+            }
+        }
+
+        fn remove_smartcard_key(&self, provider: &[u8], flags: u32) -> Result<(), AgentError> {
+            if provider == b"provider" && flags == 7 {
+                Ok(())
+            } else {
+                Err(AgentError::AgentFailure)
+            }
         }
     }
 
@@ -957,6 +1096,12 @@ mod tests {
             AgentMessage::SignResponse { signature: b"signature".to_vec() },
             AgentMessage::RemoveIdentity { key_blob: KEY.to_vec() },
             AgentMessage::RemoveAllIdentities,
+            AgentMessage::AddSmartcardKey {
+                provider: b"\\\\.\\\\CAPI".to_vec(),
+                pin: SecretVec::new(b"secret".to_vec()),
+                flags: 3,
+            },
+            AgentMessage::RemoveSmartcardKey { provider: b"\\\\.\\\\CAPI".to_vec(), flags: 3 },
             AgentMessage::Lock { passphrase: b"secret".to_vec() },
             AgentMessage::Unlock { passphrase: b"secret".to_vec() },
             AgentMessage::Success,
@@ -982,6 +1127,8 @@ mod tests {
         );
         client.remove_all_identities().expect("remove all");
         client.remove_identity(KEY).expect("remove identity");
+        client.add_smartcard_key(b"provider", b"pin", 7).expect("smart-card add");
+        client.remove_smartcard_key(b"provider", 7).expect("smart-card remove");
         client.lock(b"secret").expect("lock");
         client.unlock(b"secret").expect("unlock");
     }
@@ -1098,6 +1245,22 @@ mod tests {
             Err(AgentError::FieldTooLarge("passphrase"))
         );
         assert_eq!(client.remove_identity(&[]), Err(AgentError::MalformedFrame("key blob")));
+        assert_eq!(
+            client.add_smartcard_key(&[], b"pin", 0),
+            Err(AgentError::MalformedFrame("smart-card provider"))
+        );
+        assert_eq!(
+            client.remove_smartcard_key(&[], 0),
+            Err(AgentError::MalformedFrame("smart-card provider"))
+        );
+        assert_eq!(
+            client.add_smartcard_key(&vec![0; MAX_AGENT_PROVIDER + 1], b"pin", 0),
+            Err(AgentError::FieldTooLarge("smart-card provider"))
+        );
+        assert_eq!(
+            client.add_smartcard_key(b"provider", &vec![0; MAX_AGENT_PASSPHRASE + 1], 0),
+            Err(AgentError::FieldTooLarge("smart-card PIN"))
+        );
     }
 
     #[test]
@@ -1117,5 +1280,16 @@ mod tests {
             format!("{:?}", AgentMessage::Lock { passphrase: b"private passphrase".to_vec() });
         assert!(!lock_debug.contains("private passphrase"));
         assert!(lock_debug.contains("passphrase_len"));
+
+        let smartcard_debug = format!(
+            "{:?}",
+            AgentMessage::AddSmartcardKey {
+                provider: b"provider".to_vec(),
+                pin: SecretVec::new(b"private pin".to_vec()),
+                flags: 0,
+            }
+        );
+        assert!(!smartcard_debug.contains("private pin"));
+        assert!(smartcard_debug.contains("pin_len"));
     }
 }

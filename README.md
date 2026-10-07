@@ -28,8 +28,9 @@ channels, SFTP, and interoperability work remain open. The agent boundary alread
 bounded request-identities and sign request/response codecs, a transport-neutral client, and
 server dispatch with opaque failure mapping. A bounded blocking stream adapter is available with
 Unix-domain socket and Windows named-pipe constructors; Pageant and agent forwarding remain open.
-The client and server boundary also supports bounded remove-all, lock, and unlock management
-requests with opaque failure mapping; add-identity, Pageant, and forwarding remain open.
+The client and server boundary also supports bounded remove-all, smart-card load and removal, lock,
+and unlock management requests with opaque failure mapping; add-identity, Pageant, and forwarding
+remain open.
 The server boundary can serve multiple bounded frames from a blocking stream until clean peer
 close and rejects oversized input before allocation.
 Exact-key remove-identity requests are also supported with bounded public-key blobs; add-identity,

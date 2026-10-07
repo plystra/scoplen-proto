@@ -36,6 +36,8 @@ All notable changes to `scoplen-proto` will be recorded here.
   validation and oversized-response tests. Pageant compatibility and forwarding remain open.
 - Added bounded agent management requests for removing all identities and locking or unlocking
   an agent, with opaque failure mapping and passphrase limits.
+- Added bounded smart-card provider load and removal requests with PIN redaction, flag preservation,
+  opaque failure mapping, and client/server store hooks.
 - Added bounded blocking agent-server serving that validates fragmented request frames, dispatches
   multiple requests until clean peer close, and refuses oversized input before allocation.
 - Added exact-key remove-identity requests with bounded public-key blobs, client helpers, server
