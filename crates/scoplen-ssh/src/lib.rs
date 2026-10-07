@@ -31,8 +31,9 @@ pub use authentication::{
     Ed25519SshSigner, HostKey, HostKeyVerificationError, HostKeyVerifier,
     KeyboardInteractiveInfoRequest, KeyboardInteractivePrompt, KeyboardInteractiveRequest,
     KeyboardInteractiveResponse, NoneAuthRequest, P256SshSigner, PasswordAuthRequest,
-    PublicKeyAuthContext, PublicKeyAuthRequest, PublicKeyIdentity, SignatureAlgorithm, Signer,
-    SignerError, SshCertificate, UserAuthContext, UserCertificate, verify_host_key,
+    PublicKeyAuthContext, PublicKeyAuthRequest, PublicKeyIdentity, RsaSshSigner,
+    SignatureAlgorithm, Signer, SignerError, SshCertificate, UserAuthContext, UserCertificate,
+    verify_host_key,
 };
 pub use policy::{AlgorithmCategory, AlgorithmPolicyError, HostAlgorithmPolicy};
 pub use security_key::{
