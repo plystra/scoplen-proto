@@ -1218,12 +1218,22 @@ impl SftpClient {
         self.pending.len()
     }
 
+    /// Number of request slots available before the configured pipeline bound is reached.
+    #[must_use]
+    pub fn available_requests(&self) -> usize {
+        self.max_outstanding.saturating_sub(self.pending.len())
+    }
+
     pub(crate) fn tracks_request(&self, id: u32) -> bool {
         self.pending.contains(&id)
     }
 
     pub(crate) fn release_request(&mut self, id: u32) {
         self.pending.remove(&id);
+    }
+
+    pub(crate) fn clear_pending(&mut self) {
+        self.pending.clear();
     }
 
     fn queue<F>(&mut self, build: F) -> Result<SftpPacket, SftpError>
