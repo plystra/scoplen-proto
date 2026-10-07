@@ -15,6 +15,7 @@ mod authentication;
 mod channels;
 mod policy;
 mod security_key;
+mod sftp;
 mod transport;
 
 #[cfg(unix)]
@@ -50,6 +51,10 @@ pub use policy::{AlgorithmCategory, AlgorithmPolicyError, HostAlgorithmPolicy};
 pub use security_key::{
     SecurityKeyAlgorithm, SecurityKeyAuthRequest, SecurityKeyError, SecurityKeyProvider,
     SecurityKeyPublicKey, SecurityKeySignOptions, SecurityKeySignature,
+};
+pub use sftp::{
+    MAX_SFTP_EXTENSIONS, MAX_SFTP_HANDLE, MAX_SFTP_OUTSTANDING, MAX_SFTP_PACKET, MAX_SFTP_STRING,
+    SftpAttributes, SftpClient, SftpError, SftpExtension, SftpPacket,
 };
 pub use transport::{
     EXT_INFO_CLIENT, EXT_INFO_SERVER, KeyExchangeFamily, NegotiatedTransport, STRICT_KEX_CLIENT,
