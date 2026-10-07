@@ -29,6 +29,8 @@ const REMOVE_SMARTCARD_KEY: u8 = 21;
 const LOCK: u8 = 22;
 const UNLOCK: u8 = 23;
 const ADD_IDENTITY_CONSTRAINED: u8 = 25;
+const EXTENSION: u8 = 27;
+const EXTENSION_FAILURE: u8 = 28;
 
 const CONSTRAIN_LIFETIME: u8 = 1;
 const CONSTRAIN_CONFIRM: u8 = 2;
@@ -57,6 +59,8 @@ pub const MAX_AGENT_CONSTRAINTS: usize = 256;
 pub const MAX_AGENT_EXTENSION_NAME: usize = 4096;
 /// Maximum extension details accepted by an identity constraint.
 pub const MAX_AGENT_EXTENSION_DETAILS: usize = 64 * 1024;
+/// Maximum opaque request or response contents accepted by an agent extension.
+pub const MAX_AGENT_EXTENSION_DATA: usize = 192 * 1024;
 /// OpenSSH requests an RSA SHA-256 signature when this flag is set.
 pub const AGENT_SIGN_FLAG_RSA_SHA2_256: u32 = 2;
 /// OpenSSH requests an RSA SHA-512 signature when this flag is set.
@@ -196,6 +200,12 @@ pub enum AgentMessage {
     IdentitiesAnswer { identities: Vec<AgentIdentity> },
     /// Return an SSH signature blob.
     SignResponse { signature: Vec<u8> },
+    /// Send an opaque extension request to the agent.
+    ExtensionRequest { name: Vec<u8>, contents: Vec<u8> },
+    /// Return opaque contents from a successful extension request.
+    ExtensionResponse { contents: Vec<u8> },
+    /// Report an extension-specific failure.
+    ExtensionFailure,
     /// Add one software identity without constraints.
     AddIdentity { private_key: AgentPrivateKey, comment: Vec<u8> },
     /// Add one software identity with bounded standard agent constraints.
@@ -240,6 +250,16 @@ impl fmt::Debug for AgentMessage {
                 .debug_struct("SignResponse")
                 .field("signature_len", &signature.len())
                 .finish(),
+            Self::ExtensionRequest { name, contents } => formatter
+                .debug_struct("ExtensionRequest")
+                .field("name_len", &name.len())
+                .field("contents_len", &contents.len())
+                .finish(),
+            Self::ExtensionResponse { contents } => formatter
+                .debug_struct("ExtensionResponse")
+                .field("contents_len", &contents.len())
+                .finish(),
+            Self::ExtensionFailure => formatter.write_str("ExtensionFailure"),
             Self::AddIdentity { private_key, comment } => formatter
                 .debug_struct("AddIdentity")
                 .field("private_key", private_key)
@@ -349,19 +369,18 @@ impl AgentMessage {
                 payload.push(SIGN_RESPONSE);
                 append_string(&mut payload, signature, MAX_AGENT_KEY_BLOB, "signature")?;
             }
+            Self::ExtensionRequest { name, contents } => {
+                encode_extension_request(&mut payload, name, contents)?;
+            }
+            Self::ExtensionResponse { contents } => {
+                encode_extension_response(&mut payload, contents)?;
+            }
+            Self::ExtensionFailure => payload.push(EXTENSION_FAILURE),
             Self::AddIdentity { private_key, comment } => {
-                validate_comment(comment)?;
-                payload.push(ADD_IDENTITY);
-                append_private_key(&mut payload, private_key)?;
-                append_string(&mut payload, comment, MAX_AGENT_COMMENT, "comment")?;
+                encode_add_identity(&mut payload, private_key, comment, &[], false)?;
             }
             Self::AddIdentityConstrained { private_key, comment, constraints } => {
-                validate_comment(comment)?;
-                validate_constraints(constraints, true)?;
-                payload.push(ADD_IDENTITY_CONSTRAINED);
-                append_private_key(&mut payload, private_key)?;
-                append_string(&mut payload, comment, MAX_AGENT_COMMENT, "comment")?;
-                append_constraints(&mut payload, constraints)?;
+                encode_add_identity(&mut payload, private_key, comment, constraints, true)?;
             }
             Self::RemoveIdentity { key_blob } => {
                 validate_blob(key_blob, MAX_AGENT_KEY_BLOB, "key blob")?;
@@ -571,6 +590,20 @@ impl<C: AgentChannel> AgentClient<C> {
         }
     }
 
+    /// Send one bounded opaque extension request and return its response contents.
+    pub fn extension(&mut self, name: &[u8], contents: &[u8]) -> Result<Vec<u8>, AgentError> {
+        validate_blob(name, MAX_AGENT_EXTENSION_NAME, "extension name")?;
+        validate_size(contents, MAX_AGENT_EXTENSION_DATA, "extension contents")?;
+        match self.exchange(&AgentMessage::ExtensionRequest {
+            name: name.to_vec(),
+            contents: contents.to_vec(),
+        })? {
+            AgentMessage::ExtensionResponse { contents } => Ok(contents),
+            AgentMessage::ExtensionFailure | AgentMessage::Failure => Err(AgentError::AgentFailure),
+            _ => Err(AgentError::UnexpectedResponse),
+        }
+    }
+
     /// Add one software identity without constraints.
     pub fn add_identity(
         &mut self,
@@ -677,6 +710,11 @@ pub trait AgentKeyStore {
     /// Sign data for a key that exactly matches one stored identity.
     fn sign(&self, key_blob: &[u8], data: &[u8], flags: u32) -> Result<Vec<u8>, AgentError>;
 
+    /// Handle one bounded opaque agent extension request.
+    fn extension(&self, _name: &[u8], _contents: &[u8]) -> Result<Vec<u8>, AgentError> {
+        Err(AgentError::AgentFailure)
+    }
+
     /// Add one private identity and its optional bounded constraints.
     fn add_identity(
         &self,
@@ -746,6 +784,12 @@ impl<S: AgentKeyStore> AgentServer<S> {
                 match self.store.sign(&key_blob, &data, flags) {
                     Ok(signature) => AgentMessage::SignResponse { signature },
                     Err(_) => AgentMessage::Failure,
+                }
+            }
+            AgentMessage::ExtensionRequest { name, contents } => {
+                match self.store.extension(&name, &contents) {
+                    Ok(contents) => AgentMessage::ExtensionResponse { contents },
+                    Err(_) => AgentMessage::ExtensionFailure,
                 }
             }
             AgentMessage::AddIdentity { private_key, comment } => {
@@ -902,6 +946,7 @@ fn decode_payload(payload: &[u8]) -> Result<AgentMessage, AgentError> {
             validate_blob(signature, MAX_AGENT_KEY_BLOB, "signature")?;
             Ok(AgentMessage::SignResponse { signature: signature.to_vec() })
         }
+        EXTENSION => decode_extension_request(rest),
         ADD_IDENTITY => decode_add_identity(rest, false),
         REMOVE_IDENTITY => {
             let (key_blob, trailing) = read_string(rest, MAX_AGENT_KEY_BLOB, "key blob")?;
@@ -931,11 +976,31 @@ fn decode_payload(payload: &[u8]) -> Result<AgentMessage, AgentError> {
             Ok(AgentMessage::Unlock { passphrase: passphrase.to_vec() })
         }
         SUCCESS if rest.is_empty() => Ok(AgentMessage::Success),
-        SUCCESS => Err(AgentError::MalformedFrame("success payload")),
+        SUCCESS => decode_extension_response(rest),
         FAILURE if rest.is_empty() => Ok(AgentMessage::Failure),
         FAILURE => Err(AgentError::MalformedFrame("failure payload")),
+        EXTENSION_FAILURE if rest.is_empty() => Ok(AgentMessage::ExtensionFailure),
+        EXTENSION_FAILURE => Err(AgentError::MalformedFrame("extension failure payload")),
         other => Err(AgentError::UnsupportedMessage(other)),
     }
+}
+
+fn decode_extension_request(rest: &[u8]) -> Result<AgentMessage, AgentError> {
+    let (name, rest) = read_string(rest, MAX_AGENT_EXTENSION_NAME, "extension name")?;
+    validate_blob(name, MAX_AGENT_EXTENSION_NAME, "extension name")?;
+    let (contents, trailing) = read_string(rest, MAX_AGENT_EXTENSION_DATA, "extension contents")?;
+    if !trailing.is_empty() {
+        return Err(AgentError::MalformedFrame("extension request trailing data"));
+    }
+    Ok(AgentMessage::ExtensionRequest { name: name.to_vec(), contents: contents.to_vec() })
+}
+
+fn decode_extension_response(rest: &[u8]) -> Result<AgentMessage, AgentError> {
+    let (contents, trailing) = read_string(rest, MAX_AGENT_EXTENSION_DATA, "extension response")?;
+    if !trailing.is_empty() {
+        return Err(AgentError::MalformedFrame("extension response trailing data"));
+    }
+    Ok(AgentMessage::ExtensionResponse { contents: contents.to_vec() })
 }
 
 fn decode_add_identity(input: &[u8], constrained: bool) -> Result<AgentMessage, AgentError> {
@@ -993,6 +1058,44 @@ fn append_private_key(
 ) -> Result<(), AgentError> {
     validate_private_key_data(private_key.as_bytes())?;
     output.extend_from_slice(private_key.as_bytes());
+    Ok(())
+}
+
+fn encode_extension_request(
+    output: &mut Vec<u8>,
+    name: &[u8],
+    contents: &[u8],
+) -> Result<(), AgentError> {
+    validate_blob(name, MAX_AGENT_EXTENSION_NAME, "extension name")?;
+    validate_size(contents, MAX_AGENT_EXTENSION_DATA, "extension contents")?;
+    output.push(EXTENSION);
+    append_string(output, name, MAX_AGENT_EXTENSION_NAME, "extension name")?;
+    append_string(output, contents, MAX_AGENT_EXTENSION_DATA, "extension contents")?;
+    Ok(())
+}
+
+fn encode_extension_response(output: &mut Vec<u8>, contents: &[u8]) -> Result<(), AgentError> {
+    validate_size(contents, MAX_AGENT_EXTENSION_DATA, "extension response")?;
+    output.push(SUCCESS);
+    append_string(output, contents, MAX_AGENT_EXTENSION_DATA, "extension response")?;
+    Ok(())
+}
+
+fn encode_add_identity(
+    output: &mut Vec<u8>,
+    private_key: &AgentPrivateKey,
+    comment: &[u8],
+    constraints: &[AgentConstraint],
+    constrained: bool,
+) -> Result<(), AgentError> {
+    validate_comment(comment)?;
+    validate_constraints(constraints, constrained)?;
+    output.push(if constrained { ADD_IDENTITY_CONSTRAINED } else { ADD_IDENTITY });
+    append_private_key(output, private_key)?;
+    append_string(output, comment, MAX_AGENT_COMMENT, "comment")?;
+    if constrained {
+        append_constraints(output, constraints)?;
+    }
     Ok(())
 }
 
@@ -1236,6 +1339,14 @@ mod tests {
             Ok(self.signature.clone())
         }
 
+        fn extension(&self, name: &[u8], contents: &[u8]) -> Result<Vec<u8>, AgentError> {
+            if name == b"query" && contents == b"supported" {
+                Ok(b"query\0session-bind@openssh.com".to_vec())
+            } else {
+                Err(AgentError::AgentFailure)
+            }
+        }
+
         fn add_identity(
             &self,
             private_key: &AgentPrivateKey,
@@ -1462,6 +1573,12 @@ mod tests {
                 identities: vec![AgentIdentity::new(KEY, b"work key").expect("identity")],
             },
             AgentMessage::SignResponse { signature: b"signature".to_vec() },
+            AgentMessage::ExtensionRequest {
+                name: b"query".to_vec(),
+                contents: b"supported".to_vec(),
+            },
+            AgentMessage::ExtensionResponse { contents: b"query\0extension".to_vec() },
+            AgentMessage::ExtensionFailure,
             AgentMessage::AddIdentity {
                 private_key: ed25519_private_key(),
                 comment: b"added key".to_vec(),
@@ -1510,6 +1627,10 @@ mod tests {
             client.sign(KEY, b"payload", AGENT_SIGN_FLAG_RSA_SHA2_512).expect("signature"),
             b"signed payload"
         );
+        assert_eq!(
+            client.extension(b"query", b"supported").expect("extension"),
+            b"query\0session-bind@openssh.com"
+        );
         let private_key = ed25519_private_key();
         client.add_identity(&private_key, b"added key").expect("add identity");
         client
@@ -1542,6 +1663,7 @@ mod tests {
         assert_eq!(server.dispatch(request), AgentMessage::Failure);
         let mut client = AgentClient::new(Loopback { server });
         assert_eq!(client.sign(b"other key", b"payload", 0), Err(AgentError::AgentFailure));
+        assert_eq!(client.extension(b"unknown", b"request"), Err(AgentError::AgentFailure));
     }
 
     #[test]
@@ -1619,6 +1741,25 @@ mod tests {
             AgentMessage::decode_frame(&frame),
             Err(AgentError::MalformedFrame("unsupported identity constraint"))
         );
+
+        let mut payload = vec![EXTENSION];
+        append_test_string(&mut payload, b"query");
+        append_test_string(&mut payload, b"contents");
+        payload.push(0x01);
+        let mut frame = (u32::try_from(payload.len()).expect("test frame")).to_be_bytes().to_vec();
+        frame.extend_from_slice(&payload);
+        assert_eq!(
+            AgentMessage::decode_frame(&frame),
+            Err(AgentError::MalformedFrame("extension request trailing data"))
+        );
+
+        let mut payload = vec![EXTENSION_FAILURE, 0];
+        let mut frame = (u32::try_from(payload.len()).expect("test frame")).to_be_bytes().to_vec();
+        frame.append(&mut payload);
+        assert_eq!(
+            AgentMessage::decode_frame(&frame),
+            Err(AgentError::MalformedFrame("extension failure payload"))
+        );
     }
 
     #[test]
@@ -1692,6 +1833,14 @@ mod tests {
             client.add_smartcard_key(b"provider", &vec![0; MAX_AGENT_PASSPHRASE + 1], 0),
             Err(AgentError::FieldTooLarge("smart-card PIN"))
         );
+        assert_eq!(
+            client.extension(&[], b"contents"),
+            Err(AgentError::MalformedFrame("extension name"))
+        );
+        assert_eq!(
+            client.extension(b"extension", &vec![0; MAX_AGENT_EXTENSION_DATA + 1]),
+            Err(AgentError::FieldTooLarge("extension contents"))
+        );
         let private_key = ed25519_private_key();
         assert_eq!(
             client.add_identity_constrained(&private_key, b"comment", &[]),
@@ -1753,5 +1902,15 @@ mod tests {
         );
         assert!(!add_debug.contains("private comment"));
         assert!(add_debug.contains("comment_len"));
+
+        let extension_debug = format!(
+            "{:?}",
+            AgentMessage::ExtensionRequest {
+                name: b"private-extension".to_vec(),
+                contents: b"private extension content".to_vec(),
+            }
+        );
+        assert!(!extension_debug.contains("private extension content"));
+        assert!(extension_debug.contains("contents_len"));
     }
 }
